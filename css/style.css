@@ -387,6 +387,40 @@ textarea{ resize:vertical; min-height:80px; }
 .alert-error{ background:rgba(181,83,60,.1); border-color:var(--danger); color:#f0c9be; }
 .alert-info{ background:rgba(201,162,75,.08); border-color:var(--gold-dim); color:var(--text-secondary); }
 
+/* ---------- Diálogo de confirmação ---------- */
+.booking-dialog{
+  width:min(420px, calc(100% - 32px));
+  max-height:calc(100% - 32px);
+  padding:28px 24px 24px;
+  background:var(--bg-elevated); color:var(--text-primary);
+  border:1px solid var(--gold-dim); border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-card);
+  text-align:center;
+}
+.booking-dialog::backdrop{ background:rgba(0,0,0,.72); }
+.booking-dialog-icon{
+  width:56px; height:56px; margin:0 auto 14px;
+  display:flex; align-items:center; justify-content:center;
+  border-radius:50%; border:2px solid var(--success);
+  background:rgba(126,165,131,.12); color:var(--success);
+  font-size:28px; font-weight:700;
+}
+.booking-dialog h3{ font-size:30px; color:var(--gold-bright); margin-bottom:18px; }
+.booking-dialog-details{
+  margin:0 0 18px; padding:4px 16px;
+  background:var(--bg-card); border:1px solid var(--line); border-radius:var(--radius-md);
+  text-align:left;
+}
+.booking-dialog-details div{
+  display:flex; justify-content:space-between; align-items:baseline; gap:16px;
+  padding:10px 0; border-bottom:1px solid var(--line);
+}
+.booking-dialog-details div:last-child{ border-bottom:0; }
+.booking-dialog-details dt{ font-family:var(--font-mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-faint); }
+.booking-dialog-details dd{ margin:0; font-size:16px; font-weight:600; text-align:right; }
+.booking-dialog-note{ margin:0 0 6px; font-size:15px; color:var(--text-secondary); }
+.booking-dialog-countdown{ margin:0 0 18px; font-family:var(--font-mono); font-size:12px; color:var(--text-faint); }
+
 /* ---------- Contato ---------- */
 .contact-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; }
 .contact-card{

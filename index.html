@@ -160,6 +160,19 @@
   </div>
 </section>
 
+<dialog id="bookingDialog" class="booking-dialog" aria-labelledby="bookingDialogTitle">
+  <div class="booking-dialog-icon" aria-hidden="true">✓</div>
+  <h3 id="bookingDialogTitle">Agendamento confirmado!</h3>
+  <dl class="booking-dialog-details">
+    <div><dt>Serviço</dt><dd id="dialogService"></dd></div>
+    <div><dt>Data</dt><dd id="dialogDate"></dd></div>
+    <div><dt>Horário</dt><dd id="dialogTime"></dd></div>
+  </dl>
+  <p class="booking-dialog-note">Anote ou tire um print desta tela.</p>
+  <p class="booking-dialog-countdown" id="dialogCountdown">Fechando em 10s</p>
+  <button type="button" class="btn btn-primary btn-block" id="dialogClose">Fechar</button>
+</dialog>
+
 <footer>
   <div class="container" style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;width:100%">
     <span id="footerBrand">BarberNet</span>

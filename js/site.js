@@ -93,6 +93,7 @@ function renderBrand(data){
 function renderStatus(data){
   const dot = document.getElementById('statusDot');
   const text = document.getElementById('statusText');
+  dot.classList.remove('open', 'closed'); // pode ser re-renderizado após um agendamento
   if(data.openNow){
     dot.classList.add('open');
     text.textContent = `Aberto agora · fecha às ${data.closesAt || '--'}`;
@@ -289,6 +290,8 @@ document.getElementById('confirmBooking').addEventListener('click', async () => 
   const result = document.getElementById('bookingResult');
   const btn = document.getElementById('confirmBooking');
 
+  if(btn.disabled || document.getElementById('bookingDialog').open) return;
+
   if(!name || !phone){
     result.innerHTML = `<div class="alert alert-error">Preencha nome e telefone para confirmar.</div>`;
     return;
@@ -303,9 +306,10 @@ document.getElementById('confirmBooking').addEventListener('click', async () => 
       time: state.selectedTime,
       name, phone, note,
     });
-    const dateBR = state.selectedDate.split('-').reverse().join('/');
-    result.innerHTML = `<div class="alert alert-success">Agendamento confirmado! Anote: dia ${esc(dateBR)} às ${esc(state.selectedTime)}.</div>`;
+    // O botão continua desabilitado até o diálogo fechar e o fluxo reiniciar
     btn.textContent = 'Confirmado ✓';
+    result.innerHTML = '';
+    openBookingDialog();
   }catch(err){
     console.error(err);
     const msg = BOOKING_ERRORS[err.message] || 'Não foi possível confirmar agora. Tente novamente em instantes.';
@@ -314,6 +318,93 @@ document.getElementById('confirmBooking').addEventListener('click', async () => 
     btn.textContent = 'Confirmar agendamento';
   }
 });
+
+/* ---------- Diálogo de confirmação ---------- */
+const DIALOG_SECONDS = 10;
+let dialogTimer = null;
+let dialogPendingReset = false; // true enquanto a confirmação atual ainda não reiniciou o fluxo
+
+function formatDateLong(iso){
+  const [y, m, d] = iso.split('-').map(Number);
+  const weekday = WEEKDAYS[new Date(y, m - 1, d).getDay()];
+  return `${weekday}, ${pad(d)}/${pad(m)}/${y}`;
+}
+
+function openBookingDialog(){
+  const dialog = document.getElementById('bookingDialog');
+  const countdown = document.getElementById('dialogCountdown');
+  const service = ((state.data && state.data.services) || [])
+    .find(s => String(s.id) === String(state.selectedService.id));
+
+  document.getElementById('dialogService').textContent = service ? service.name : '';
+  document.getElementById('dialogDate').textContent = formatDateLong(state.selectedDate);
+  document.getElementById('dialogTime').textContent = state.selectedTime;
+
+  let remaining = DIALOG_SECONDS;
+  countdown.textContent = `Fechando em ${remaining}s`;
+  dialogPendingReset = true;
+  dialog.showModal();
+  document.getElementById('dialogClose').focus();
+
+  clearInterval(dialogTimer);
+  dialogTimer = setInterval(() => {
+    remaining--;
+    if(remaining <= 0){
+      dialog.close();
+      return;
+    }
+    countdown.textContent = `Fechando em ${remaining}s`;
+  }, 1000);
+}
+
+// Botão, Esc (cancel → close) e tempo esgotado chamam dialog.close(); todos caem aqui
+function onBookingDialogClose(){
+  clearInterval(dialogTimer);
+  dialogTimer = null;
+  if(!dialogPendingReset) return;
+  dialogPendingReset = false;
+  resetBooking();
+}
+
+document.getElementById('dialogClose').addEventListener('click', () => {
+  document.getElementById('bookingDialog').close();
+});
+document.getElementById('bookingDialog').addEventListener('close', onBookingDialogClose);
+
+function resetBooking(){
+  state.selectedService = null;
+  state.selectedDate = null;
+  state.selectedTime = null;
+
+  document.getElementById('clientName').value = '';
+  document.getElementById('clientPhone').value = '';
+  document.getElementById('clientNote').value = '';
+  document.getElementById('dateInput').value = ''; // permite que a escolha do serviço preencha hoje de novo
+  document.getElementById('slotsGrid').innerHTML = '';
+  document.getElementById('dateHint').textContent = '';
+  document.getElementById('bookingResult').innerHTML = '';
+
+  document.querySelectorAll('#servicePickGrid .pick-card.selected, #slotsGrid .slot-btn.selected')
+    .forEach(el => el.classList.remove('selected'));
+
+  const btn = document.getElementById('confirmBooking');
+  btn.disabled = false;
+  btn.textContent = 'Confirmar agendamento';
+  document.getElementById('toStep3').disabled = true;
+
+  goToStep(1);
+
+  // Atualiza "próximas vagas" para o horário recém-agendado sumir; falha aqui não incomoda o cliente
+  api('getPublicData')
+    .then(data => {
+      state.data = data;
+      renderStatus(data);
+      renderHeroSlots(data);
+    })
+    .catch(err => console.error(err));
+
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
 
 /* ---------- Menu mobile ---------- */
 document.getElementById('navToggle').addEventListener('click', () => {
