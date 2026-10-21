@@ -23,17 +23,27 @@ const SHEET_BOOKINGS    = 'Agendamentos';
 
 const SLOT_STEP_MINUTES = 30; // granularidade dos horários oferecidos
 
+/* Colunas que precisam ficar em formato texto ('@') para o Sheets não
+   converter "09:00" em Date, telefones/senhas em número etc.
+   conv: como normalizar o valor já existente na migração. */
+const TEXT_COLUMNS = {
+  [SHEET_CONFIG]:     [{ col:'B', conv:v => toStr_(v) }],
+  [SHEET_HOURS]:      [{ col:'C', conv:v => toHHmm_(v) }, { col:'D', conv:v => toHHmm_(v) }],
+  [SHEET_EXCEPTIONS]: [{ col:'B', conv:v => toISODate_(v) }, { col:'D', conv:v => toHHmm_(v) }, { col:'E', conv:v => toHHmm_(v) }],
+  [SHEET_BOOKINGS]:   [{ col:'B', conv:v => toISODate_(v) }, { col:'C', conv:v => toHHmm_(v) }, { col:'H', conv:v => toStr_(v) }],
+};
+
 /* ============================================================
    SETUP — rode uma única vez pelo editor do Apps Script
    ============================================================ */
 function setup(){
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 
-  ensureSheet_(ss, SHEET_CONFIG, ['chave','valor']);
+  applyTextFormats_(ensureSheet_(ss, SHEET_CONFIG, ['chave','valor']));
   ensureSheet_(ss, SHEET_SERVICES, ['id','nome','preco','duracao','ativo']);
-  ensureSheet_(ss, SHEET_HOURS, ['diaSemana','ativo','abre','fecha']);
-  ensureSheet_(ss, SHEET_EXCEPTIONS, ['id','data','tipo','abre','fecha','nota']);
-  ensureSheet_(ss, SHEET_BOOKINGS, ['id','data','hora','duracao','servicoId','servicoNome','nome','telefone','nota','status','eventoId','criadoEm']);
+  applyTextFormats_(ensureSheet_(ss, SHEET_HOURS, ['diaSemana','ativo','abre','fecha']));
+  applyTextFormats_(ensureSheet_(ss, SHEET_EXCEPTIONS, ['id','data','tipo','abre','fecha','nota']));
+  applyTextFormats_(ensureSheet_(ss, SHEET_BOOKINGS, ['id','data','hora','duracao','servicoId','servicoNome','nome','telefone','nota','status','eventoId','criadoEm']));
 
   // Config padrão (só cria se ainda não existir)
   const cfg = getConfigSheet_();
@@ -88,6 +98,49 @@ function ensureSheet_(ss, name, headers){
   return sheet;
 }
 
+/* Aplica formato texto às colunas de TEXT_COLUMNS (idempotente) */
+function applyTextFormats_(sheet){
+  (TEXT_COLUMNS[sheet.getName()] || []).forEach(({ col }) => {
+    sheet.getRange(`${col}:${col}`).setNumberFormat('@');
+  });
+}
+
+/* ============================================================
+   MIGRAÇÃO — rode uma vez em planilhas criadas antes desta versão.
+   Pode ser rodada de novo sem efeito colateral.
+   ============================================================ */
+function migrarFormatos(){
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  Object.keys(TEXT_COLUMNS).forEach(name => {
+    const sheet = ss.getSheetByName(name);
+    if(!sheet){
+      Logger.log(`${name}: aba não encontrada, ignorada.`);
+      return;
+    }
+    const lastRow = sheet.getLastRow();
+    let fixed = 0;
+    TEXT_COLUMNS[name].forEach(({ col, conv }) => {
+      if(lastRow < 2){ sheet.getRange(`${col}:${col}`).setNumberFormat('@'); return; }
+      const range = sheet.getRange(`${col}2:${col}${lastRow}`);
+      // Lê ANTES de mudar o formato, enquanto o valor ainda é Date/número
+      const values = range.getValues();
+      const out = values.map(([v]) => {
+        let s = conv(v);
+        if(s === '' && toStr_(v) !== ''){
+          // não reconheceu o formato: preserva o texto em vez de apagar
+          Logger.log(`${name}!${col}: valor não reconhecido mantido como texto: ${v}`);
+          s = toStr_(v);
+        }
+        if(typeof v !== 'string' || s !== v) fixed++;
+        return [s];
+      });
+      sheet.getRange(`${col}:${col}`).setNumberFormat('@');
+      range.setValues(out);
+    });
+    Logger.log(`${name}: ${fixed} célula(s) corrigida(s).`);
+  });
+}
+
 /* ============================================================
    ROTEAMENTO HTTP
    ============================================================ */
@@ -136,7 +189,8 @@ function jsonOutput_(obj){
 
 function requireAuth_(e){
   const cfg = readConfig_();
-  if(!e.parameter.pass || e.parameter.pass !== cfg.password){
+  const pass = toStr_(e.parameter.pass);
+  if(!pass || !cfg.password || pass !== cfg.password){
     throw new Error('SENHA_INVALIDA');
   }
 }
@@ -152,7 +206,7 @@ function readConfig_(){
   if(!sheet) return {};
   const rows = sheet.getDataRange().getValues().slice(1);
   const cfg = {};
-  rows.forEach(([k,v]) => { if(k) cfg[k] = v; });
+  rows.forEach(([k,v]) => { if(toStr_(k)) cfg[toStr_(k)] = toStr_(v); });
   return cfg;
 }
 function setConfigValue_(key, value){
@@ -194,7 +248,7 @@ function removeService_(id){
 function listHours_(){
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_HOURS);
   const rows = sheet.getDataRange().getValues().slice(1);
-  return rows.map(r => ({ weekday:Number(r[0]), active:r[1]===true, open:r[2], close:r[3] }));
+  return rows.map(r => ({ weekday:Number(r[0]), active:r[1]===true, open:toHHmm_(r[2]), close:toHHmm_(r[3]) }));
 }
 function saveHours_(body){
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_HOURS);
@@ -211,7 +265,7 @@ function listExceptions_(){
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_EXCEPTIONS);
   const rows = sheet.getDataRange().getValues().slice(1);
   return rows.filter(r => r[0]).map(r => ({
-    id:r[0], date:formatDate_(r[1]), type:r[2], open:r[3], close:r[4], note:r[5],
+    id:toStr_(r[0]), date:toISODate_(r[1]), type:toStr_(r[2]), open:toHHmm_(r[3]), close:toHHmm_(r[4]), note:toStr_(r[5]),
   }));
 }
 function addException_(body){
@@ -233,8 +287,8 @@ function listBookings_(){
   const rows = sheet.getDataRange().getValues().slice(1);
   return rows.filter(r => r[0] && r[9] !== 'cancelado')
     .map(r => ({
-      id:r[0], date:formatDate_(r[1]), time:r[2], duration:r[3],
-      serviceId:r[4], serviceName:r[5], name:r[6], phone:r[7], note:r[8], status:r[9],
+      id:toStr_(r[0]), date:toISODate_(r[1]), time:toHHmm_(r[2]), duration:Number(r[3]),
+      serviceId:toStr_(r[4]), serviceName:toStr_(r[5]), name:toStr_(r[6]), phone:toStr_(r[7]), note:toStr_(r[8]), status:toStr_(r[9]),
     }))
     .sort((a,b) => (a.date+a.time).localeCompare(b.date+b.time));
 }
@@ -261,7 +315,7 @@ function createBooking_(body){
   }
 
   const cfg = readConfig_();
-  const start = new Date(`${date}T${time}:00`);
+  const start = new Date(`${date}T${toHHmm_(time)}:00`);
   const end = new Date(start.getTime() + service.duration * 60000);
 
   let eventId = '';
@@ -349,6 +403,8 @@ function getAvailability_(dateStr, serviceId){
 }
 
 function buildSlotCandidates_(dateStr, open, close, duration){
+  open = toHHmm_(open); close = toHHmm_(close);
+  if(!open || !close) return [];
   const [oh, om] = open.split(':').map(Number);
   const [ch, cm] = close.split(':').map(Number);
   const dayStart = new Date(`${dateStr}T00:00:00`);
@@ -370,9 +426,16 @@ function getBusyRanges_(dateStr){
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_BOOKINGS);
   const rows = sheet.getDataRange().getValues().slice(1);
   return rows
-    .filter(r => r[0] && r[1] && r[9] !== 'cancelado' && formatDate_(r[1]) === dateStr)
+    .filter(r => r[0] && r[1] && toStr_(r[9]) !== 'cancelado' && toISODate_(r[1]) === dateStr)
     .map(r => {
-      const start = new Date(`${formatDate_(r[1])}T${r[2]}:00`);
+      const time = toHHmm_(r[2]);
+      if(!time){
+        // hora ilegível: bloqueia o dia inteiro para não permitir agendamento duplo
+        Logger.log(`Agendamento ${r[0]} com hora inválida: ${r[2]}`);
+        const start = new Date(`${dateStr}T00:00:00`);
+        return { start, end: new Date(start.getTime() + 86400000) };
+      }
+      const start = new Date(`${dateStr}T${time}:00`);
       const end = new Date(start.getTime() + Number(r[3])*60000);
       return { start, end };
     });
@@ -436,9 +499,27 @@ function deleteRowById_(sheetName, id){
     if(rows[i][0] === id){ sheet.deleteRow(i+1); return; }
   }
 }
-function formatDate_(value){
-  if(value instanceof Date) return Utilities.formatDate(value, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-  return String(value);
+/* Fuso da planilha: é nele que o Sheets interpreta datas/horas das células */
+function sheetTz_(){
+  return SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone() || Session.getScriptTimeZone();
+}
+function toStr_(v){
+  return String(v ?? '').trim();
+}
+/* Date → 'HH:mm'; '9:00' / '09:00:00' → '09:00'; qualquer outra coisa → '' */
+function toHHmm_(v){
+  if(v instanceof Date) return isNaN(v) ? '' : Utilities.formatDate(v, sheetTz_(), 'HH:mm');
+  if(typeof v === 'string'){
+    const m = v.trim().match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+    if(!m || Number(m[1]) > 23 || Number(m[2]) > 59) return '';
+    return `${m[1].padStart(2,'0')}:${m[2]}`;
+  }
+  return '';
+}
+/* Date → 'yyyy-MM-dd'; string → como está */
+function toISODate_(v){
+  if(v instanceof Date) return isNaN(v) ? '' : Utilities.formatDate(v, sheetTz_(), 'yyyy-MM-dd');
+  return toStr_(v);
 }
 function formatDateLabel_(dateStr){
   const d = new Date(`${dateStr}T00:00:00`);
@@ -456,11 +537,11 @@ function computeOpenStatus_(hours, exceptions){
 
   if(exception){
     if(exception.type === 'closed'){ closedToday = true; }
-    else{ open = exception.open; close = exception.close; }
+    else{ open = toHHmm_(exception.open); close = toHHmm_(exception.close); }
   }else{
     const h = hours.find(x => x.weekday === now.getDay());
     if(!h || !h.active){ closedToday = true; }
-    else{ open = h.open; close = h.close; }
+    else{ open = toHHmm_(h.open); close = toHHmm_(h.close); }
   }
 
   if(!closedToday && open && close){
@@ -483,11 +564,11 @@ function computeOpenStatus_(hours, exceptions){
     const exc = exceptions.find(e => e.date === ds);
     if(exc){
       if(exc.type === 'closed') continue;
-      return { openNow:false, opensAt: exc.open, opensAtLabel: formatDateLabel_(ds) };
+      return { openNow:false, opensAt: toHHmm_(exc.open), opensAtLabel: formatDateLabel_(ds) };
     }
     const h = hours.find(x => x.weekday === d.getDay());
     if(h && h.active){
-      return { openNow:false, opensAt: h.open, opensAtLabel: i===1 ? 'amanhã' : formatDateLabel_(ds) };
+      return { openNow:false, opensAt: toHHmm_(h.open), opensAtLabel: i===1 ? 'amanhã' : formatDateLabel_(ds) };
     }
   }
   return { openNow:false };
