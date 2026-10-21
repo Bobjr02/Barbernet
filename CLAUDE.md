@@ -18,6 +18,7 @@
 - Textos da interface em **português do Brasil**.
 - **Não altere** a URL em `js/config.js`.
 - Commits pequenos, mensagens em português no formato `tipo: descrição` (`fix`, `feat`, `refactor`, `docs`).
+- Sempre que alterar qualquer arquivo em css/ ou js/, atualize o ?v= em index.html e admin.html para a data atual + sequencial (AAAAMMDD-N).
 
 ## Como testar
 
