@@ -3,7 +3,7 @@
 Este site funciona em duas partes:
 
 - **Site + painel** (os arquivos `.html`, `.css`, `.js`) — a parte visual, que qualquer pessoa acessa.
-- **Backend no Google** (`apps-script/Code.gs`) — guarda tudo numa Planilha Google e cria os agendamentos direto no Google Calendar. Não precisa de servidor pago nem de banco de dados.
+- **Backend no Google** (`Code.gs` + `appsscript.json`) — guarda tudo numa Planilha Google e cria os agendamentos direto no Google Calendar. Não precisa de servidor pago nem de banco de dados.
 
 Leva uns 10 minutos para configurar. Só precisa ser feito **uma vez**, por quem for usar o sistema (o dono da barbearia).
 
@@ -14,8 +14,10 @@ Leva uns 10 minutos para configurar. Só precisa ser feito **uma vez**, por quem
 1. Acesse [sheets.google.com](https://sheets.google.com) e crie uma planilha em branco.
 2. Dê um nome a ela, por exemplo **"BarberNet — Dados"**.
 3. No menu, vá em **Extensões → Apps Script**.
-4. Apague o conteúdo do arquivo `Código.gs` que abrir e cole todo o conteúdo do arquivo `apps-script/Code.gs` deste projeto.
-5. Salve (ícone de disquete ou `Ctrl+S`).
+4. Apague o conteúdo do arquivo `Código.gs` que abrir e cole todo o conteúdo do arquivo `Code.gs` deste projeto.
+5. Na barra lateral esquerda, clique na **engrenagem (Configurações do projeto)** e marque **"Mostrar arquivo de manifesto 'appsscript.json' no editor"**.
+6. Volte ao **Editor** (ícone `< >`), abra o arquivo `appsscript.json` que apareceu, apague o conteúdo e cole todo o conteúdo do arquivo `appsscript.json` deste projeto. Ele define o fuso horário (America/Maceio) usado nos agendamentos.
+7. Salve (ícone de disquete ou `Ctrl+S`).
 
 ## Passo 2 — Rodar a configuração inicial
 
@@ -77,6 +79,18 @@ Tudo isso é salvo direto na planilha e refletido no Google Calendar automaticam
 
 ---
 
+## Atualizando uma instalação antiga
+
+Se a sua planilha foi criada com uma versão anterior do BarberNet:
+
+1. No editor do Apps Script, apague o conteúdo do `Code.gs` e cole o novo `Code.gs` deste projeto. Se o `appsscript.json` ainda não estiver configurado, siga os itens 5 e 6 do Passo 1.
+2. Salve e publique uma nova versão: **Implantar → Gerenciar implantações → editar (lápis) → Versão: Nova versão → Implantar**. A URL continua a mesma.
+3. Na lista de funções (ao lado do botão ▶ Executar), selecione **`migrarFormatos`** e clique em **Executar** uma única vez. Ela converte horários, datas e telefones já gravados para texto e alinha o fuso da planilha ao do script.
+4. Confira o resultado em **Execuções** (ou `Ctrl+Enter`): o registro mostra quantas células foram corrigidas em cada aba. Rodar de novo não causa problema — só corrige 0 células.
+5. Confira a senha na aba **Config**: se ela era só números, pode ter sido alterada pelo Google Sheets. Nesse caso, digite-a novamente.
+
+---
+
 ## Perguntas comuns
 
 **Preciso pagar alguma coisa pro Google?**
@@ -92,4 +106,4 @@ Sim — cada uma cria sua própria planilha (Passos 1–3), o que mantém os dad
 As cores ficam no arquivo `css/style.css`, no topo (`:root`), e os textos fixos estão direto no `index.html`/`admin.html`.
 
 **Um cliente pode agendar um horário que acabou de ser ocupado por outro?**
-Não — no momento da confirmação o sistema revalida a disponibilidade antes de gravar o agendamento.
+Não — as confirmações são processadas uma de cada vez, e o sistema revalida a disponibilidade antes de gravar o agendamento.

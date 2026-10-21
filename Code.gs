@@ -25,12 +25,12 @@ const SLOT_STEP_MINUTES = 30; // granularidade dos horários oferecidos
 
 /* Colunas que precisam ficar em formato texto ('@') para o Sheets não
    converter "09:00" em Date, telefones/senhas em número etc.
-   conv: como normalizar o valor já existente na migração. */
+   conv(v, tz): como normalizar o valor já existente na migração. */
 const TEXT_COLUMNS = {
   [SHEET_CONFIG]:     [{ col:'B', conv:v => toStr_(v) }],
-  [SHEET_HOURS]:      [{ col:'C', conv:v => toHHmm_(v) }, { col:'D', conv:v => toHHmm_(v) }],
-  [SHEET_EXCEPTIONS]: [{ col:'B', conv:v => toISODate_(v) }, { col:'D', conv:v => toHHmm_(v) }, { col:'E', conv:v => toHHmm_(v) }],
-  [SHEET_BOOKINGS]:   [{ col:'B', conv:v => toISODate_(v) }, { col:'C', conv:v => toHHmm_(v) }, { col:'H', conv:v => toStr_(v) }],
+  [SHEET_HOURS]:      [{ col:'C', conv:(v,tz) => toHHmm_(v,tz) }, { col:'D', conv:(v,tz) => toHHmm_(v,tz) }],
+  [SHEET_EXCEPTIONS]: [{ col:'B', conv:(v,tz) => toISODate_(v,tz) }, { col:'D', conv:(v,tz) => toHHmm_(v,tz) }, { col:'E', conv:(v,tz) => toHHmm_(v,tz) }],
+  [SHEET_BOOKINGS]:   [{ col:'B', conv:(v,tz) => toISODate_(v,tz) }, { col:'C', conv:(v,tz) => toHHmm_(v,tz) }, { col:'H', conv:v => toStr_(v) }],
 };
 
 /* ============================================================
@@ -38,6 +38,7 @@ const TEXT_COLUMNS = {
    ============================================================ */
 function setup(){
   const ss = SpreadsheetApp.getActiveSpreadsheet();
+  ss.setSpreadsheetTimeZone(tz_()); // planilha e script no mesmo fuso
 
   applyTextFormats_(ensureSheet_(ss, SHEET_CONFIG, ['chave','valor']));
   ensureSheet_(ss, SHEET_SERVICES, ['id','nome','preco','duracao','ativo']);
@@ -111,6 +112,8 @@ function applyTextFormats_(sheet){
    ============================================================ */
 function migrarFormatos(){
   const ss = SpreadsheetApp.getActiveSpreadsheet();
+  // Datas/horas antigas foram gravadas no fuso da planilha: lê esse fuso antes de mudar qualquer coisa
+  const sheetTz = ss.getSpreadsheetTimeZone();
   Object.keys(TEXT_COLUMNS).forEach(name => {
     const sheet = ss.getSheetByName(name);
     if(!sheet){
@@ -125,7 +128,7 @@ function migrarFormatos(){
       // Lê ANTES de mudar o formato, enquanto o valor ainda é Date/número
       const values = range.getValues();
       const out = values.map(([v]) => {
-        let s = conv(v);
+        let s = conv(v, sheetTz);
         if(s === '' && toStr_(v) !== ''){
           // não reconheceu o formato: preserva o texto em vez de apagar
           Logger.log(`${name}!${col}: valor não reconhecido mantido como texto: ${v}`);
@@ -139,6 +142,11 @@ function migrarFormatos(){
     });
     Logger.log(`${name}: ${fixed} célula(s) corrigida(s).`);
   });
+  // Só depois de tudo convertido para texto, alinha o fuso da planilha ao do script
+  if(sheetTz !== tz_()){
+    ss.setSpreadsheetTimeZone(tz_());
+    Logger.log(`Fuso da planilha alterado de ${sheetTz} para ${tz_()}.`);
+  }
 }
 
 /* ============================================================
@@ -293,8 +301,13 @@ function listBookings_(){
     .sort((a,b) => (a.date+a.time).localeCompare(b.date+b.time));
 }
 
+const MAX_DAYS_AHEAD = 60;          // agendamento até 60 dias à frente
+const MAX_FUTURE_BOOKINGS_PER_PHONE = 2;
+
 function createBooking_(body){
-  const { serviceId, date, time } = body;
+  const serviceId = toStr_(body.serviceId);
+  const date = toStr_(body.date);
+  const time = toStr_(body.time);
   const name = String(body.name == null ? '' : body.name).trim().slice(0, 60);
   const phone = String(body.phone == null ? '' : body.phone).trim().slice(0, 20);
   const note = String(body.note == null ? '' : body.note).trim().slice(0, 200);
@@ -304,35 +317,70 @@ function createBooking_(body){
   if(!serviceId || !date || !time){
     return { error: 'DADOS_INCOMPLETOS' };
   }
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)){
+    return { error: 'DADOS_INVALIDOS' };
+  }
+  const maxDate = Utilities.formatDate(new Date(Date.now() + MAX_DAYS_AHEAD*86400000), tz_(), 'yyyy-MM-dd');
+  if(date < todayISO_() || date > maxDate){
+    return { error: 'DATA_FORA_DO_PERIODO' };
+  }
+  const phoneDigits = phone.replace(/\D/g, '');
+  if(phoneDigits.length < 10 || phoneDigits.length > 13){
+    return { error: 'DADOS_INVALIDOS' };
+  }
   const services = listServices_();
   const service = services.find(s => s.id === serviceId);
   if(!service) return { error: 'SERVICO_NAO_ENCONTRADO' };
 
-  // Revalida disponibilidade no momento da confirmação (evita choque de horário)
-  const avail = getAvailability_(date, serviceId);
-  if(avail.closed || !(avail.slots || []).includes(time)){
-    return { error: 'HORARIO_INDISPONIVEL' };
-  }
-
-  const cfg = readConfig_();
-  const start = new Date(`${date}T${toHHmm_(time)}:00`);
-  const end = new Date(start.getTime() + service.duration * 60000);
-
-  let eventId = '';
+  // Uma confirmação por vez: sem o lock, duas requisições simultâneas poderiam
+  // ver o mesmo horário livre e gravar as duas.
+  const lock = LockService.getScriptLock();
   try{
-    const cal = CalendarApp.getCalendarById(cfg.calendarId);
-    const event = cal.createEvent(`${service.name} — ${name}`, start, end, {
-      description: `Cliente: ${name}\nTelefone: ${phone}\nObservação: ${note || '-'}`,
-    });
-    eventId = event.getId();
+    lock.waitLock(10000);
   }catch(err){
-    // segue mesmo se a agenda falhar — o agendamento na planilha é a fonte da verdade
+    return { error: 'SISTEMA_OCUPADO' };
   }
+  try{
+    // Anti-spam dentro do lock, para que dois pedidos simultâneos do mesmo telefone não passem juntos
+    const nowKey = `${todayISO_()} ${Utilities.formatDate(new Date(), tz_(), 'HH:mm')}`;
+    const futureForPhone = listBookings_().filter(b =>
+      b.status === 'confirmado' &&
+      `${b.date} ${b.time}` >= nowKey &&
+      b.phone.replace(/\D/g, '') === phoneDigits
+    ).length;
+    if(futureForPhone >= MAX_FUTURE_BOOKINGS_PER_PHONE){
+      return { error: 'LIMITE_DE_AGENDAMENTOS' };
+    }
 
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_BOOKINGS);
-  const id = Utilities.getUuid();
-  sheet.appendRow([id, date, time, service.duration, service.id, service.name, name, phone, note || '', 'confirmado', eventId, new Date()]);
-  return { ok:true, id };
+    // Revalida disponibilidade no momento da confirmação (evita choque de horário)
+    const avail = getAvailability_(date, serviceId);
+    if(avail.closed || !(avail.slots || []).includes(time)){
+      return { error: 'HORARIO_INDISPONIVEL' };
+    }
+
+    const cfg = readConfig_();
+    const start = new Date(`${date}T${toHHmm_(time)}:00`);
+    const end = new Date(start.getTime() + service.duration * 60000);
+
+    let eventId = '';
+    try{
+      const cal = CalendarApp.getCalendarById(cfg.calendarId);
+      const event = cal.createEvent(`${service.name} — ${name}`, start, end, {
+        description: `Cliente: ${name}\nTelefone: ${phone}\nObservação: ${note || '-'}`,
+      });
+      eventId = event.getId();
+    }catch(err){
+      // segue mesmo se a agenda falhar — o agendamento na planilha é a fonte da verdade
+    }
+
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_BOOKINGS);
+    const id = Utilities.getUuid();
+    sheet.appendRow([id, date, time, service.duration, service.id, service.name, name, phone, note || '', 'confirmado', eventId, new Date()]);
+    SpreadsheetApp.flush(); // grava antes de liberar o lock, para o próximo já enxergar esta linha
+    return { ok:true, id };
+  }finally{
+    lock.releaseLock();
+  }
 }
 
 function cancelBooking_(id){
@@ -416,7 +464,7 @@ function buildSlotCandidates_(dateStr, open, close, duration){
   while(true){
     const end = new Date(cursor.getTime() + duration*60000);
     if(end > closeTime) break;
-    slots.push({ start:new Date(cursor), end, label: Utilities.formatDate(cursor, Session.getScriptTimeZone(), 'HH:mm') });
+    slots.push({ start:new Date(cursor), end, label: Utilities.formatDate(cursor, tz_(), 'HH:mm') });
     cursor = new Date(cursor.getTime() + SLOT_STEP_MINUTES*60000);
   }
   return slots;
@@ -499,16 +547,17 @@ function deleteRowById_(sheetName, id){
     if(rows[i][0] === id){ sheet.deleteRow(i+1); return; }
   }
 }
-/* Fuso da planilha: é nele que o Sheets interpreta datas/horas das células */
-function sheetTz_(){
-  return SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone() || Session.getScriptTimeZone();
+/* Fuso único do sistema (definido em appsscript.json) */
+function tz_(){
+  return Session.getScriptTimeZone();
 }
 function toStr_(v){
   return String(v ?? '').trim();
 }
-/* Date → 'HH:mm'; '9:00' / '09:00:00' → '09:00'; qualquer outra coisa → '' */
-function toHHmm_(v){
-  if(v instanceof Date) return isNaN(v) ? '' : Utilities.formatDate(v, sheetTz_(), 'HH:mm');
+/* Date → 'HH:mm'; '9:00' / '09:00:00' → '09:00'; qualquer outra coisa → ''.
+   tz opcional: usado só por migrarFormatos() para ler valores antigos no fuso da planilha. */
+function toHHmm_(v, tz){
+  if(v instanceof Date) return isNaN(v) ? '' : Utilities.formatDate(v, tz || tz_(), 'HH:mm');
   if(typeof v === 'string'){
     const m = v.trim().match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
     if(!m || Number(m[1]) > 23 || Number(m[2]) > 59) return '';
@@ -517,16 +566,16 @@ function toHHmm_(v){
   return '';
 }
 /* Date → 'yyyy-MM-dd'; string → como está */
-function toISODate_(v){
-  if(v instanceof Date) return isNaN(v) ? '' : Utilities.formatDate(v, sheetTz_(), 'yyyy-MM-dd');
+function toISODate_(v, tz){
+  if(v instanceof Date) return isNaN(v) ? '' : Utilities.formatDate(v, tz || tz_(), 'yyyy-MM-dd');
   return toStr_(v);
 }
 function formatDateLabel_(dateStr){
   const d = new Date(`${dateStr}T00:00:00`);
-  return Utilities.formatDate(d, Session.getScriptTimeZone(), 'dd/MM (EEEE)');
+  return Utilities.formatDate(d, tz_(), 'dd/MM (EEEE)');
 }
 function todayISO_(){
-  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  return Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd');
 }
 
 function computeOpenStatus_(hours, exceptions){
@@ -560,7 +609,7 @@ function computeOpenStatus_(hours, exceptions){
   // Fechado — procura a próxima abertura nos próximos 7 dias
   for(let i=1;i<=7;i++){
     const d = new Date(now.getTime() + i*86400000);
-    const ds = Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    const ds = Utilities.formatDate(d, tz_(), 'yyyy-MM-dd');
     const exc = exceptions.find(e => e.date === ds);
     if(exc){
       if(exc.type === 'closed') continue;
@@ -581,7 +630,7 @@ function computeNextSlots_(services, hours){
 
   for(let i=0;i<7;i++){
     const d = new Date(Date.now() + i*86400000);
-    const ds = Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    const ds = Utilities.formatDate(d, tz_(), 'yyyy-MM-dd');
     const avail = getAvailability_(ds, shortest.id);
     if(!avail.closed && avail.slots && avail.slots.length){
       const label = i===0 ? 'hoje' : (i===1 ? 'amanhã' : formatDateLabel_(ds));

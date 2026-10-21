@@ -274,6 +274,14 @@ document.getElementById('toStep3').addEventListener('click', () => {
   goToStep(3);
 });
 
+const BOOKING_ERRORS = {
+  HORARIO_INDISPONIVEL: 'Esse horário acabou de ser ocupado. Volte e escolha outro.',
+  LIMITE_DE_AGENDAMENTOS: 'Este telefone já tem 2 agendamentos marcados. Para marcar outro, fale com a barbearia.',
+  DATA_FORA_DO_PERIODO: 'Escolha uma data entre hoje e os próximos 60 dias.',
+  DADOS_INVALIDOS: 'Confira seus dados: informe o nome e um telefone com DDD (10 a 13 dígitos).',
+  SISTEMA_OCUPADO: 'O sistema está ocupado no momento. Tente novamente em alguns segundos.',
+};
+
 document.getElementById('confirmBooking').addEventListener('click', async () => {
   const name = document.getElementById('clientName').value.trim();
   const phone = document.getElementById('clientPhone').value.trim();
@@ -295,11 +303,13 @@ document.getElementById('confirmBooking').addEventListener('click', async () => 
       time: state.selectedTime,
       name, phone, note,
     });
-    result.innerHTML = `<div class="alert alert-success">Agendamento confirmado para ${esc(state.selectedDate)} às ${esc(state.selectedTime)}. Você vai receber a confirmação pelo contato informado.</div>`;
+    const dateBR = state.selectedDate.split('-').reverse().join('/');
+    result.innerHTML = `<div class="alert alert-success">Agendamento confirmado! Anote: dia ${esc(dateBR)} às ${esc(state.selectedTime)}.</div>`;
     btn.textContent = 'Confirmado ✓';
   }catch(err){
     console.error(err);
-    result.innerHTML = `<div class="alert alert-error">Não foi possível confirmar — o horário pode ter acabado de ser ocupado. Volte e escolha outro.</div>`;
+    const msg = BOOKING_ERRORS[err.message] || 'Não foi possível confirmar agora. Tente novamente em instantes.';
+    result.innerHTML = `<div class="alert alert-error">${esc(msg)}</div>`;
     btn.disabled = false;
     btn.textContent = 'Confirmar agendamento';
   }
