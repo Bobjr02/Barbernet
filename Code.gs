@@ -240,8 +240,14 @@ function listBookings_(){
 }
 
 function createBooking_(body){
-  const { serviceId, date, time, name, phone, note } = body;
-  if(!serviceId || !date || !time || !name || !phone){
+  const { serviceId, date, time } = body;
+  const name = String(body.name == null ? '' : body.name).trim().slice(0, 60);
+  const phone = String(body.phone == null ? '' : body.phone).trim().slice(0, 20);
+  const note = String(body.note == null ? '' : body.note).trim().slice(0, 200);
+  if(!name || !phone){
+    return { error: 'DADOS_INVALIDOS' };
+  }
+  if(!serviceId || !date || !time){
     return { error: 'DADOS_INCOMPLETOS' };
   }
   const services = listServices_();

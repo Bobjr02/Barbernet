@@ -5,15 +5,11 @@
    qualquer armazenamento sensível no navegador.
    ============================================================ */
 
-const WEEKDAYS = ['Domingo','Segunda-feira','Terça-feira','Quarta-feira','Quinta-feira','Sexta-feira','Sábado'];
-
 const adminState = {
   baseUrl: '',
   pass: '',
   data: null,
 };
-
-function money(v){ return Number(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'}); }
 
 async function adminApi(action, params = {}, method = 'GET', body = null){
   let url = `${adminState.baseUrl}?action=${encodeURIComponent(action)}&pass=${encodeURIComponent(adminState.pass)}`;
@@ -125,10 +121,10 @@ function renderServicesList(services){
   wrap.innerHTML = services.map(s => `
     <div class="list-item">
       <div class="grow">
-        <div>${s.name}</div>
-        <div class="muted">${money(s.price)} · ${s.duration} min</div>
+        <div>${esc(s.name)}</div>
+        <div class="muted">${esc(money(s.price))} · ${esc(s.duration)} min</div>
       </div>
-      <button class="icon-btn" data-remove-service="${s.id}" title="Remover">✕</button>
+      <button class="icon-btn" data-remove-service="${esc(s.id)}" title="Remover">✕</button>
     </div>
   `).join('');
   wrap.querySelectorAll('[data-remove-service]').forEach(btn => {
@@ -173,13 +169,13 @@ function renderHoursForm(hours){
     const h = byDay[idx] || { active:false, open:'09:00', close:'19:00' };
     return `
       <div class="day-row" data-day="${idx}">
-        <span>${label}</span>
+        <span>${esc(label)}</span>
         <label class="switch">
           <input type="checkbox" ${h.active ? 'checked' : ''} data-field="active">
           <span class="track"></span>
         </label>
-        <input type="time" value="${h.open}" data-field="open" ${h.active ? '' : 'disabled'}>
-        <input type="time" value="${h.close}" data-field="close" ${h.active ? '' : 'disabled'}>
+        <input type="time" value="${esc(h.open)}" data-field="open" ${h.active ? '' : 'disabled'}>
+        <input type="time" value="${esc(h.close)}" data-field="close" ${h.active ? '' : 'disabled'}>
       </div>
     `;
   }).join('');
@@ -225,10 +221,10 @@ function renderExceptionsList(exceptions){
   wrap.innerHTML = exceptions.map(e => `
     <div class="list-item">
       <div class="grow">
-        <div>${e.dateLabel || e.date}${e.note ? ` — ${e.note}` : ''}</div>
-        <div class="muted">${e.type === 'closed' ? 'Fechado o dia todo' : `Horário especial ${e.open}–${e.close}`}</div>
+        <div>${esc(e.dateLabel || e.date)}${e.note ? ` — ${esc(e.note)}` : ''}</div>
+        <div class="muted">${e.type === 'closed' ? 'Fechado o dia todo' : `Horário especial ${esc(e.open)}–${esc(e.close)}`}</div>
       </div>
-      <button class="icon-btn" data-remove-exception="${e.id}" title="Remover">✕</button>
+      <button class="icon-btn" data-remove-exception="${esc(e.id)}" title="Remover">✕</button>
     </div>
   `).join('');
   wrap.querySelectorAll('[data-remove-exception]').forEach(btn => {
@@ -275,10 +271,10 @@ async function loadBookings(){
     wrap.innerHTML = bookings.map(b => `
       <div class="list-item">
         <div class="grow">
-          <div>${b.date} às ${b.time} — ${b.serviceName || ''}</div>
-          <div class="muted">${b.name} · ${b.phone}${b.note ? ` · ${b.note}` : ''}</div>
+          <div>${esc(b.date)} às ${esc(b.time)} — ${esc(b.serviceName)}</div>
+          <div class="muted">${esc(b.name)} · ${esc(b.phone)}${b.note ? ` · ${esc(b.note)}` : ''}</div>
         </div>
-        <button class="icon-btn" data-cancel="${b.id}" title="Cancelar">✕</button>
+        <button class="icon-btn" data-cancel="${esc(b.id)}" title="Cancelar">✕</button>
       </div>
     `).join('');
     wrap.querySelectorAll('[data-cancel]').forEach(btn => {

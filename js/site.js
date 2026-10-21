@@ -2,7 +2,6 @@
    BarberNet — Lógica do site público
    ============================================================ */
 
-const WEEKDAYS = ['Domingo','Segunda-feira','Terça-feira','Quarta-feira','Quinta-feira','Sexta-feira','Sábado'];
 const WEEKDAYS_SHORT = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
 
 const state = {
@@ -12,9 +11,6 @@ const state = {
   selectedTime: null,
 };
 
-function money(v){
-  return Number(v || 0).toLocaleString('pt-BR', { style:'currency', currency:'BRL' });
-}
 function pad(n){ return String(n).padStart(2,'0'); }
 function todayISO(){
   const d = new Date();
@@ -84,10 +80,10 @@ function showLoadError(){
 function renderBrand(data){
   const name = data.name || 'BarberNet';
   document.title = name;
-  document.getElementById('brandName').innerHTML = `${name}`;
+  document.getElementById('brandName').textContent = name;
   document.getElementById('footerBrand').textContent = `© ${new Date().getFullYear()} ${name}`;
   if(data.tagline){
-    document.getElementById('heroTitle').innerHTML = data.tagline;
+    document.getElementById('heroTitle').innerHTML = richText(data.tagline);
   }
   if(data.lede){
     document.getElementById('heroLede').textContent = data.lede;
@@ -119,8 +115,8 @@ function renderHeroSlots(data){
   }
   wrap.innerHTML = slots.map(s => `
     <div class="slot-row free">
-      <span>${s.time}</span>
-      <span class="tag">${s.dateLabel}</span>
+      <span>${esc(s.time)}</span>
+      <span class="tag">${esc(s.dateLabel)}</span>
     </div>
   `).join('');
 }
@@ -134,10 +130,10 @@ function renderServices(data){
   }
   grid.innerHTML = services.map(s => `
     <div class="service-card">
-      <h3>${s.name}</h3>
+      <h3>${esc(s.name)}</h3>
       <div class="service-meta">
-        <span class="service-price">${money(s.price)}</span>
-        <span class="service-duration">${s.duration} min</span>
+        <span class="service-price">${esc(money(s.price))}</span>
+        <span class="service-duration">${esc(s.duration)} min</span>
       </div>
     </div>
   `).join('');
@@ -149,9 +145,9 @@ function renderHours(data){
   const todayIdx = new Date().getDay();
   tbody.innerHTML = hours.map(h => `
     <tr class="${h.weekday === todayIdx ? 'today' : ''}">
-      <td class="day">${WEEKDAYS[h.weekday]}</td>
+      <td class="day">${esc(WEEKDAYS[h.weekday])}</td>
       <td class="${h.active ? '' : 'state-closed'}">
-        ${h.active ? `${h.open} – ${h.close}` : 'Fechado'}
+        ${h.active ? `${esc(h.open)} – ${esc(h.close)}` : 'Fechado'}
       </td>
     </tr>
   `).join('');
@@ -159,7 +155,7 @@ function renderHours(data){
   const exceptions = (data.exceptions || []);
   if(exceptions.length){
     document.getElementById('exceptionNote').innerHTML = exceptions.map(e => `
-      <div class="exception-note">⚠ <span>${e.dateLabel}: ${e.type === 'closed' ? 'fechado' : `horário especial ${e.open}–${e.close}`}${e.note ? ` — ${e.note}` : ''}</span></div>
+      <div class="exception-note">⚠ <span>${esc(e.dateLabel)}: ${e.type === 'closed' ? 'fechado' : `horário especial ${esc(e.open)}–${esc(e.close)}`}${e.note ? ` — ${esc(e.note)}` : ''}</span></div>
     `).join('');
   }
 }
@@ -167,15 +163,18 @@ function renderHours(data){
 function renderContacts(data){
   const grid = document.getElementById('contactGrid');
   const items = [];
-  if(data.whatsapp) items.push({label:'WhatsApp', value:data.whatsapp, href:`https://wa.me/${data.whatsapp.replace(/\D/g,'')}`});
-  if(data.phone) items.push({label:'Telefone', value:data.phone, href:`tel:${data.phone.replace(/\D/g,'')}`});
-  if(data.instagram) items.push({label:'Instagram', value:`@${data.instagram.replace('@','')}`, href:`https://instagram.com/${data.instagram.replace('@','')}`});
-  if(data.address) items.push({label:'Endereço', value:data.address, href:data.mapLink || '#'});
+  if(data.whatsapp) items.push({label:'WhatsApp', value:data.whatsapp, href:`https://wa.me/${String(data.whatsapp).replace(/\D/g,'')}`});
+  if(data.phone) items.push({label:'Telefone', value:data.phone, href:`tel:${String(data.phone).replace(/\D/g,'')}`});
+  if(data.instagram){
+    const handle = String(data.instagram).replace('@','');
+    items.push({label:'Instagram', value:`@${handle}`, href:`https://instagram.com/${encodeURIComponent(handle)}`});
+  }
+  if(data.address) items.push({label:'Endereço', value:data.address, href:safeUrl(data.mapLink)});
 
   grid.innerHTML = items.length ? items.map(i => `
-    <a class="contact-card" href="${i.href}" target="_blank" rel="noopener">
-      <span class="label">${i.label}</span>
-      <span class="value">${i.value}</span>
+    <a class="contact-card" href="${esc(i.href)}" target="_blank" rel="noopener">
+      <span class="label">${esc(i.label)}</span>
+      <span class="value">${esc(i.value)}</span>
     </a>
   `).join('') : `<div class="empty-state">Contatos ainda não cadastrados.</div>`;
 }
@@ -189,9 +188,9 @@ function renderServicePickGrid(data){
     return;
   }
   grid.innerHTML = services.map(s => `
-    <div class="pick-card" data-id="${s.id}" data-duration="${s.duration}">
-      <h4>${s.name}</h4>
-      <div class="price">${money(s.price)} · ${s.duration} min</div>
+    <div class="pick-card" data-id="${esc(s.id)}" data-duration="${esc(s.duration)}">
+      <h4>${esc(s.name)}</h4>
+      <div class="price">${esc(money(s.price))} · ${esc(s.duration)} min</div>
     </div>
   `).join('');
 
@@ -253,7 +252,7 @@ async function loadSlotsForDate(){
       return;
     }
     slotsGrid.innerHTML = slots.map(s => `
-      <button class="slot-btn" data-time="${s}">${s}</button>
+      <button class="slot-btn" data-time="${esc(s)}">${esc(s)}</button>
     `).join('');
     slotsGrid.querySelectorAll('.slot-btn').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -296,7 +295,7 @@ document.getElementById('confirmBooking').addEventListener('click', async () => 
       time: state.selectedTime,
       name, phone, note,
     });
-    result.innerHTML = `<div class="alert alert-success">Agendamento confirmado para ${state.selectedDate} às ${state.selectedTime}. Você vai receber a confirmação pelo contato informado.</div>`;
+    result.innerHTML = `<div class="alert alert-success">Agendamento confirmado para ${esc(state.selectedDate)} às ${esc(state.selectedTime)}. Você vai receber a confirmação pelo contato informado.</div>`;
     btn.textContent = 'Confirmado ✓';
   }catch(err){
     console.error(err);
