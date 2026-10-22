@@ -759,8 +759,14 @@ function buildSlotCandidates_(dateStr, open, close, duration){
 
 function getBusyRanges_(dateStr){
   const sheet = getBookingsSheet_();
-  const c = requireCols_(cols_(sheet), ['id','data','hora','duracao','status']);
+  const c = requireCols_(cols_(sheet), ['id','data','hora','duracao','servicoId','status']);
   const rows = sheet.getDataRange().getValues().slice(1);
+  const validDuration = v => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : null; };
+  let serviceDurations = null; // lido no máximo uma vez por chamada, só se alguma linha precisar
+  const wholeDay = () => {
+    const start = new Date(`${dateStr}T00:00:00`);
+    return { start, end: new Date(start.getTime() + 86400000) };
+  };
   return rows
     .filter(r => r[c.id] && r[c.data] && !FREE_STATUSES.includes(toStr_(r[c.status]).toLowerCase()) && toISODate_(r[c.data]) === dateStr)
     .map(r => {
@@ -768,12 +774,24 @@ function getBusyRanges_(dateStr){
       if(!time){
         // hora ilegível: bloqueia o dia inteiro para não permitir agendamento duplo
         Logger.log(`Agendamento ${r[c.id]} com hora inválida: ${r[c.hora]}`);
-        const start = new Date(`${dateStr}T00:00:00`);
-        return { start, end: new Date(start.getTime() + 86400000) };
+        return wholeDay();
+      }
+      let duration = validDuration(r[c.duracao]);
+      if(duration === null){
+        // duração ilegível: usa a duração atual do serviço; sem ela, bloqueia o dia inteiro
+        if(!serviceDurations){
+          serviceDurations = {};
+          listServices_().forEach(s => serviceDurations[toStr_(s.id)] = s.duration);
+        }
+        duration = validDuration(serviceDurations[toStr_(r[c.servicoId])]);
+        if(duration === null){
+          Logger.log(`Agendamento ${r[c.id]} com duração inválida (${r[c.duracao]}) e serviço ${r[c.servicoId]} sem duração válida: dia inteiro bloqueado`);
+          return wholeDay();
+        }
+        Logger.log(`Agendamento ${r[c.id]} com duração inválida (${r[c.duracao]}): usando ${duration} min do serviço ${r[c.servicoId]}`);
       }
       const start = new Date(`${dateStr}T${time}:00`);
-      const end = new Date(start.getTime() + Number(r[c.duracao])*60000);
-      return { start, end };
+      return { start, end: new Date(start.getTime() + duration*60000) };
     });
 }
 
