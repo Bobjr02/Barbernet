@@ -94,6 +94,7 @@ function hydrateAll(data){
   document.getElementById('fInsta').value = data.instagram || '';
   document.getElementById('fMap').value = data.mapLink || '';
   document.getElementById('fAddress').value = data.address || '';
+  hydrateReminderSettings(data);
 
   renderServicesList(data.services || []);
   renderHoursForm(data.hours || []);
@@ -122,16 +123,90 @@ document.getElementById('saveDados').addEventListener('click', async () => {
     instagram: document.getElementById('fInsta').value.trim(),
     mapLink: document.getElementById('fMap').value.trim(),
     address: document.getElementById('fAddress').value.trim(),
+    reminderHoursBefore: Number(document.getElementById('fReminderHours').value),
+    reminderTemplate: document.getElementById('fReminderTemplate').value.trim(),
   };
+  // Endereço vazio = não altera (o servidor só aceita https://)
+  const siteUrl = document.getElementById('fSiteUrl').value.trim();
+  if(siteUrl) payload.siteUrl = siteUrl;
+  const invalid = reminderSettingsError(payload);
+  if(invalid){
+    msg.innerHTML = `<div class="alert alert-error">${esc(invalid)}</div>`;
+    return;
+  }
   msg.innerHTML = `<div class="alert alert-info">Salvando…</div>`;
   try{
     await adminApi('saveInfo', payload);
+    if(adminState.data){
+      adminState.data.reminderHoursBefore = payload.reminderHoursBefore;
+      if(payload.siteUrl) adminState.data.siteUrl = payload.siteUrl;
+    }
     msg.innerHTML = `<div class="alert alert-success">Dados salvos.</div>`;
   }catch(err){
     if(isSessionError(err)) return;
     console.error(err);
-    msg.innerHTML = `<div class="alert alert-error">Erro ao salvar. Tente novamente.</div>`;
+    const text = err.message === 'DADOS_INVALIDOS'
+      ? 'Confira os lembretes: o endereço do site precisa começar com https:// e o texto não pode ficar vazio (máx. 1000 caracteres).'
+      : 'Erro ao salvar. Tente novamente.';
+    msg.innerHTML = `<div class="alert alert-error">${esc(text)}</div>`;
   }
+});
+
+/* ---------- Lembretes: configurações ---------- */
+const REMINDER_HOURS = [2, 3, 6, 12, 24, 48];
+const REMINDER_TEMPLATE_MAX = 1000;
+
+function hydrateReminderSettings(data){
+  // Sem endereço salvo: sugere o do próprio painel (só serve se for https)
+  const suggestion = new URL('./', location.href).href;
+  document.getElementById('fSiteUrl').value = data.siteUrl || (suggestion.startsWith('https://') ? suggestion : '');
+  const hours = data.reminderHoursOptions || REMINDER_HOURS;
+  const select = document.getElementById('fReminderHours');
+  select.innerHTML = hours.map(h => `<option value="${esc(h)}">${esc(h)} horas antes</option>`).join('');
+  select.value = String(data.reminderHoursBefore || 24);
+  document.getElementById('fReminderTemplate').value = data.reminderTemplate || data.reminderTemplateDefault || '';
+  renderReminderPreview();
+}
+
+function reminderSettingsError(p){
+  if(p.siteUrl !== undefined && !/^https:\/\/[^\s"'<>?#]+$/i.test(p.siteUrl)){
+    return 'O endereço do site precisa começar com https:// (sem ? ou #).';
+  }
+  if(!REMINDER_HOURS.includes(p.reminderHoursBefore)) return 'Escolha a janela do lembrete.';
+  if(!p.reminderTemplate) return 'O texto do lembrete não pode ficar vazio.';
+  if(p.reminderTemplate.length > REMINDER_TEMPLATE_MAX) return `O texto do lembrete pode ter no máximo ${REMINDER_TEMPLATE_MAX} caracteres.`;
+  return '';
+}
+
+/* Mesma substituição do buildReminderMessage_ (Code.gs), com dados de exemplo */
+function fillReminderTemplate(template, values){
+  return template.replace(/\{(\w+)\}/g, (match, key) =>
+    Object.prototype.hasOwnProperty.call(values, key) ? values[key] : match);
+}
+function renderReminderPreview(){
+  const template = document.getElementById('fReminderTemplate').value;
+  let site = document.getElementById('fSiteUrl').value.trim() || 'https://seu-site/';
+  if(!site.endsWith('/')) site += '/';
+  const d = new Date(Date.now() + 86400000);
+  const values = {
+    nome: 'João',
+    barbearia: document.getElementById('fName').value.trim() || 'Sua barbearia',
+    servico: 'Corte masculino',
+    data: `${WEEKDAYS[d.getDay()].toLowerCase()}, ${pad(d.getDate())}/${pad(d.getMonth()+1)}`,
+    hora: '14:30',
+    link: `${site}agendamento.html#exemplo`,
+  };
+  document.getElementById('reminderPreview').textContent = fillReminderTemplate(template, values);
+  document.getElementById('reminderTemplateCount').textContent = `${template.length}/${REMINDER_TEMPLATE_MAX}`;
+}
+['fReminderTemplate', 'fSiteUrl', 'fName'].forEach(id => {
+  document.getElementById(id).addEventListener('input', renderReminderPreview);
+});
+document.getElementById('restoreReminderTemplate').addEventListener('click', () => {
+  const def = adminState.data && adminState.data.reminderTemplateDefault;
+  if(!def) return;
+  document.getElementById('fReminderTemplate').value = def;
+  renderReminderPreview();
 });
 
 /* ---------- Serviços ---------- */
@@ -288,6 +363,9 @@ const BOOKING_EMPTY = {
   pendentes: 'Nenhum atendimento aguardando baixa.',
   historico: 'Nenhum atendimento nos últimos 30 dias.',
 };
+const REMINDER_ERRORS = {
+  SITE_URL_NAO_CONFIGURADO: 'Configure o endereço do site em Dados da barbearia → Lembretes para montar o link do cliente.',
+};
 const PAYMENT_LABELS = { dinheiro:'Dinheiro', pix:'Pix', debito:'Cartão de débito', credito:'Cartão de crédito', outro:'Outro' };
 const BOOKING_ACTION_ERRORS = {
   AGENDAMENTO_NAO_ENCONTRADO: 'Agendamento não encontrado. A lista foi atualizada.',
@@ -312,6 +390,7 @@ function bookingStart(b){
 
 function renderCounts(counts){
   if(!counts) return;
+  adminState.counts = counts;
   const setCount = (id, n) => {
     const el = document.getElementById(id);
     el.textContent = n > 0 ? String(n) : '';
@@ -319,13 +398,21 @@ function renderCounts(counts){
   };
   setCount('countPendentes', counts.pendentes);
   setCount('countHoje', counts.naoConfirmadosHoje);
+  setCount('countLembretes', counts.lembretesPendentes);
   const alertBtn = document.getElementById('pendingAlert');
   alertBtn.hidden = !(counts.pendentes > 0);
   alertBtn.textContent = `Você tem ${counts.pendentes} atendimento(s) aguardando baixa`;
+  const remindersBtn = document.getElementById('remindersAlert');
+  remindersBtn.hidden = !(counts.lembretesPendentes > 0);
+  remindersBtn.textContent = `${counts.lembretesPendentes} lembrete(s) para enviar`;
 }
 
 document.getElementById('pendingAlert').addEventListener('click', () => {
   selectBookingView('pendentes', false);
+  showPanel('agendamentos');
+});
+document.getElementById('remindersAlert').addEventListener('click', () => {
+  selectBookingView('lembretes', false);
   showPanel('agendamentos');
 });
 
@@ -340,9 +427,8 @@ document.querySelectorAll('.subtab').forEach(tab => {
 });
 
 function phoneLink(phone){
-  let digits = String(phone || '').replace(/\D/g, '');
+  const digits = toWaPhone(phone);
   if(!digits) return esc(phone);
-  if(digits.length === 10 || digits.length === 11) digits = '55' + digits;
   return `<a href="https://wa.me/${esc(digits)}" target="_blank" rel="noopener">${esc(phone)}</a>`;
 }
 
@@ -431,6 +517,7 @@ async function loadBookings(){
   const view = adminState.view;
   const req = ++bookingsRequest;
   wrap.innerHTML = `<div class="skeleton" style="height:60px"></div>`;
+  if(view === 'lembretes') return loadReminders(req);
   try{
     const res = await adminApi('getBookings', { view });
     if(req !== bookingsRequest) return;
@@ -504,8 +591,92 @@ document.getElementById('bookingsList').addEventListener('click', (e) => {
     case 'reopen':
       if(confirm('Desfazer a baixa? O agendamento volta para "confirmado".')) runBookingAction(item, 'reopenBooking');
       break;
+    case 'send-reminder':
+      sendReminder(item, btn);
+      break;
+    case 'mark-reminder':
+      markReminderSent(item, btn);
+      break;
   }
 });
+
+/* ---------- Lembretes: lista e envio ---------- */
+const reminderMessages = new Map(); // id → { waPhone, message } da última lista carregada
+
+function remindersEmptyText(){
+  const hours = (adminState.data && adminState.data.reminderHoursBefore) || 24;
+  return `Nenhum lembrete pendente agora. Aparecem aqui os clientes que aceitaram receber lembrete, ainda não confirmaram presença e têm horário nas próximas ${hours} horas.`;
+}
+
+function reminderItem(r){
+  const when = /^\d{4}-\d{2}-\d{2}$/.test(r.date) ? formatDateLong(r.date) : r.date;
+  return `
+    <div class="booking-item" data-id="${esc(r.id)}">
+      <div class="booking-item-head"><strong>${esc(when)} · ${esc(r.time)}</strong></div>
+      <div>${esc(r.serviceName)}</div>
+      <div class="booking-client">${esc(r.name)} · ${phoneLink(r.waPhone)}</div>
+      <pre class="reminder-preview">${esc(r.message)}</pre>
+      <div class="booking-actions">
+        <button type="button" class="btn btn-primary" data-act="send-reminder">Enviar no WhatsApp</button>
+      </div>
+    </div>`;
+}
+
+async function loadReminders(req){
+  const wrap = document.getElementById('bookingsList');
+  try{
+    const res = await adminApi('getReminders');
+    if(req !== bookingsRequest) return;
+    renderCounts(res.counts);
+    const reminders = res.reminders || [];
+    reminderMessages.clear();
+    reminders.forEach(r => reminderMessages.set(String(r.id), { waPhone: r.waPhone, message: r.message }));
+    wrap.innerHTML = reminders.length
+      ? reminders.map(reminderItem).join('')
+      : `<div class="empty-state">${esc(remindersEmptyText())}</div>`;
+  }catch(err){
+    if(req !== bookingsRequest || isSessionError(err)) return;
+    console.error(err);
+    const msg = REMINDER_ERRORS[err.message] || BOOKING_ACTION_ERRORS[err.message] || 'Erro ao carregar os lembretes.';
+    wrap.innerHTML = `<div class="alert alert-error">${esc(msg)}</div>`;
+  }
+}
+
+/* Abre o WhatsApp de forma SÍNCRONA no clique (antes de qualquer await),
+   senão o navegador bloqueia a nova aba. Só depois registra o envio. */
+function sendReminder(item, btn){
+  const r = reminderMessages.get(item.dataset.id);
+  if(!r) return;
+  window.open(`https://wa.me/${encodeURIComponent(r.waPhone)}?text=${encodeURIComponent(r.message)}`, '_blank', 'noopener');
+  markReminderSent(item, btn);
+}
+
+/* Registra o envio; em caso de falha NÃO reabre o WhatsApp, só permite registrar de novo */
+async function markReminderSent(item, btn){
+  const msg = document.getElementById('bookingsMsg');
+  msg.innerHTML = '';
+  btn.disabled = true;
+  try{
+    await adminApi('markReminderSent', { id: item.dataset.id });
+    reminderMessages.delete(item.dataset.id);
+    item.remove();
+    const counts = { ...(adminState.counts || {}) };
+    counts.lembretesPendentes = Math.max(0, (counts.lembretesPendentes || 1) - 1);
+    renderCounts(counts);
+    const wrap = document.getElementById('bookingsList');
+    if(!wrap.querySelector('.booking-item')){
+      wrap.innerHTML = `<div class="empty-state">${esc(remindersEmptyText())}</div>`;
+    }
+  }catch(err){
+    if(isSessionError(err)) return;
+    console.error(err);
+    const text = BOOKING_ACTION_ERRORS[err.message] || 'Erro de conexão.';
+    msg.innerHTML = `<div class="alert alert-error">O WhatsApp foi aberto, mas o envio não ficou registrado (${esc(text)}). Se você mandou a mensagem, clique em "Registrar envio".</div>`;
+    btn.textContent = 'Registrar envio';
+    btn.dataset.act = 'mark-reminder';
+    btn.disabled = false;
+  }
+}
 
 document.getElementById('refreshBookings').addEventListener('click', () => {
   document.getElementById('bookingsMsg').innerHTML = '';

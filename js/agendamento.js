@@ -42,7 +42,7 @@ function isPast(b){
 }
 
 function whatsappButton(b){
-  const digits = String(b.shopWhatsapp || '').replace(/\D/g, '');
+  const digits = toWaPhone(b.shopWhatsapp);
   if(!digits) return '';
   return `<a class="btn btn-ghost btn-block" href="https://wa.me/${esc(digits)}" target="_blank" rel="noopener">Falar com a barbearia no WhatsApp</a>`;
 }

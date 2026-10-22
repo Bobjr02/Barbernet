@@ -53,6 +53,17 @@
   .count{ display:inline-flex; align-items:center; justify-content:center; min-width:20px; height:20px; padding:0 6px; border-radius:99px; font-size:11px; font-weight:800; }
   .count-danger{ background:var(--danger); color:#fff; }
   .count-warn{ background:var(--gold); color:#1a1408; }
+  .count-ok{ background:var(--success); color:#0e1a10; }
+  .top-alerts{ display:flex; flex-direction:column; gap:8px; margin-bottom:20px; }
+  .top-alerts .pending-alert{ margin-bottom:0; }
+  .pending-alert.reminders-alert{ border-color:var(--success); background:rgba(126,165,131,.12); color:#cfe4d2; }
+  .reminder-preview{
+    margin:8px 0 0; padding:12px 14px; white-space:pre-wrap; overflow-wrap:anywhere;
+    font-family:var(--font-body); font-size:13px; line-height:1.5; color:var(--text-secondary);
+    background:var(--bg-elevated); border:1px solid var(--line); border-radius:var(--radius-sm);
+  }
+  .form-section-title{ font-family:var(--font-body); font-size:17px; font-weight:800; margin:28px 0 10px; padding-top:22px; border-top:1px solid var(--line); }
+  .muted-count{ font-family:var(--font-mono); font-weight:400; color:var(--text-faint); margin-left:6px; }
   .count[hidden], .pending-alert[hidden], .complete-form[hidden]{ display:none; }
   .bookings-toolbar{ display:flex; justify-content:flex-end; margin-bottom:12px; }
   .pending-alert{
@@ -133,7 +144,10 @@
   </aside>
 
   <main class="admin-main">
-    <button type="button" class="pending-alert" id="pendingAlert" hidden></button>
+    <div class="top-alerts">
+      <button type="button" class="pending-alert" id="pendingAlert" hidden></button>
+      <button type="button" class="pending-alert reminders-alert" id="remindersAlert" hidden></button>
+    </div>
 
     <!-- Dados da barbearia -->
     <section class="admin-panel active" id="panel-dados">
@@ -151,6 +165,31 @@
           <div class="form-group"><label class="field-label">Link do mapa (opcional)</label><input type="text" id="fMap" placeholder="https://maps.google.com/..."></div>
         </div>
         <div class="form-group"><label class="field-label">Endereço</label><input type="text" id="fAddress" placeholder="Rua Exemplo, 123 — Bairro, Cidade"></div>
+
+        <h3 class="form-section-title">Lembretes</h3>
+        <p class="field-hint" style="margin:-6px 0 16px">Mensagem que você envia pelo WhatsApp, no painel, para quem aceitou receber lembrete.</p>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="field-label" for="fSiteUrl">Endereço do site</label>
+            <input type="text" id="fSiteUrl" inputmode="url" placeholder="https://usuario.github.io/Barbernet/">
+            <div class="field-hint">Usado no link pessoal do cliente. Precisa começar com https://.</div>
+          </div>
+          <div class="form-group">
+            <label class="field-label" for="fReminderHours">Mostrar lembrete</label>
+            <select id="fReminderHours"></select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="field-label" for="fReminderTemplate">Texto do lembrete <span id="reminderTemplateCount" class="muted-count"></span></label>
+          <textarea id="fReminderTemplate" maxlength="1000" rows="7"></textarea>
+          <div class="field-hint">Campos: <code>{nome}</code> primeiro nome · <code>{barbearia}</code> · <code>{servico}</code> · <code>{data}</code> · <code>{hora}</code> · <code>{link}</code> link para confirmar ou cancelar</div>
+          <button type="button" class="btn btn-ghost" id="restoreReminderTemplate" style="margin-top:10px">Restaurar texto padrão</button>
+        </div>
+        <div class="form-group">
+          <span class="field-label">Prévia (dados de exemplo)</span>
+          <pre class="reminder-preview" id="reminderPreview"></pre>
+        </div>
+
         <button class="btn btn-primary" id="saveDados">Salvar dados</button>
         <div id="dadosMsg"></div>
       </div>
@@ -209,6 +248,7 @@
         <button type="button" class="subtab active" data-view="hoje">Hoje <span class="count count-warn" id="countHoje" title="Não confirmaram presença" hidden></span></button>
         <button type="button" class="subtab" data-view="proximos">Próximos</button>
         <button type="button" class="subtab" data-view="pendentes">Pendentes de baixa <span class="count count-danger" id="countPendentes" hidden></span></button>
+        <button type="button" class="subtab" data-view="lembretes">Lembretes <span class="count count-ok" id="countLembretes" title="Lembretes para enviar" hidden></span></button>
         <button type="button" class="subtab" data-view="historico">Histórico</button>
       </div>
       <div class="bookings-toolbar">
@@ -241,8 +281,8 @@
   </main>
 </div>
 
-<script src="js/utils.js?v=20261022-2"></script>
+<script src="js/utils.js?v=20261022-4"></script>
 <script src="js/config.js?v=20261022-2"></script>
-<script src="js/admin.js?v=20261022-3"></script>
+<script src="js/admin.js?v=20261022-4"></script>
 </body>
 </html>

@@ -34,6 +34,18 @@ const BOOKING_HEADERS = [
    errado — ocupa, para nunca permitir agendamento duplo por engano. */
 const FREE_STATUSES = ['cancelado', 'faltou'];
 
+/* Lembretes pelo WhatsApp (enviados pelo dono a partir do painel) */
+const REMINDER_HOURS_OPTIONS = [2, 3, 6, 12, 24, 48];
+const REMINDER_HOURS_DEFAULT = 24;
+const REMINDER_TEMPLATE_MAX = 1000;
+const REMINDER_TEMPLATE_DEFAULT =
+  'Olá, {nome}! Passando para lembrar do seu horário na {barbearia}:\n' +
+  '{servico} — {data} às {hora}.\n' +
+  '\n' +
+  'Confirme sua presença pelo link abaixo. Se não puder vir, cancele por lá mesmo, assim liberamos o horário para outra pessoa:\n' +
+  '{link}';
+const WEEKDAYS_PT = ['domingo','segunda-feira','terça-feira','quarta-feira','quinta-feira','sexta-feira','sábado'];
+
 /* Colunas (pelo nome do cabeçalho) que precisam ficar em formato texto ('@')
    para o Sheets não converter "09:00" em Date, telefones/senhas em número etc.
    conv(v, tz): como normalizar o valor já existente na migração. */
@@ -76,6 +88,9 @@ function setup(){
     mapLink: existing.mapLink || '',
     password: existing.password || Utilities.getUuid().slice(0,8),
     slotStepMinutes: existing.slotStepMinutes || String(SLOT_STEP_MINUTES),
+    siteUrl: existing.siteUrl || '', // o painel sugere o endereço; aqui não há como descobrir
+    reminderHoursBefore: existing.reminderHoursBefore || String(REMINDER_HOURS_DEFAULT),
+    reminderTemplate: existing.reminderTemplate || REMINDER_TEMPLATE_DEFAULT,
   };
 
   // Cria a agenda dedicada, se ainda não existe
@@ -297,6 +312,8 @@ function doPost(e){
       case 'completeBooking': requireAuth_(body); result = completeBooking_(body); break;
       case 'markNoShow': requireAuth_(body); result = markNoShow_(body); break;
       case 'reopenBooking': requireAuth_(body); result = reopenBooking_(body); break;
+      case 'getReminders': requireAuth_(body); result = getReminders_(); break;
+      case 'markReminderSent': requireAuth_(body); result = markReminderSent_(body); break;
       case 'saveInfo': requireAuth_(body); result = saveInfo_(body); break;
       case 'addService': requireAuth_(body); result = addService_(body); break;
       case 'removeService': requireAuth_(body); result = removeService_(body.id); break;
@@ -459,7 +476,7 @@ function removeException_(id){
    AGENDAMENTOS
    ============================================================ */
 /* Lê a aba Agendamentos UMA vez e normaliza cada linha pelo nome da coluna.
-   Campos internos (nunca vão ao navegador): start, rowNumber, eventId. O token não é lido.
+   Campos internos (nunca vão ao navegador): start, rowNumber, eventId, token.
    As colunas da V2 são opcionais aqui, para listar mesmo antes de migrarAgendamentosV2. */
 function readBookingsSheet_(){
   const sheet = getBookingsSheet_();
@@ -488,6 +505,7 @@ function readBookingsSheet_(){
       start: bookingStart_(date, time),
       rowNumber: i + 1,
       eventId: toStr_(get(r, 'eventoId')),
+      token: toStr_(get(r, 'token')),
     });
   }
   return { sheet, c, bookings };
@@ -498,7 +516,7 @@ function readBookings_(){
 
 /* Remove os campos internos antes de enviar ao painel */
 function publicBooking_(b){
-  const { start, rowNumber, eventId, ...rest } = b;
+  const { start, rowNumber, eventId, token, ...rest } = b;
   return rest;
 }
 
@@ -677,8 +695,10 @@ function isAwaitingClose_(b, now, today){
   return b.start ? b.start <= now : (b.date !== '' && b.date <= today);
 }
 
-function bookingCounts_(bookings, now, today){
+function bookingCounts_(bookings, now, today, cfg){
+  const hours = reminderHours_(cfg);
   return {
+    lembretesPendentes: bookings.filter(b => isReminderDue_(b, now, hours)).length,
     pendentes: bookings.filter(b => isAwaitingClose_(b, now, today)).length,
     naoConfirmadosHoje: bookings.filter(b =>
       b.status === 'confirmado' && b.date === today && b.start && b.start > now && !b.presencaConfirmada
@@ -692,6 +712,7 @@ function getBookings_(view){
   const all = readBookings_();
   const now = new Date();
   const today = todayISO_();
+  const cfg = readConfig_();
   const byStart = (a, b) => (a.date + a.time).localeCompare(b.date + b.time);
   let list;
   switch(view){
@@ -712,7 +733,7 @@ function getBookings_(view){
       break;
     }
   }
-  return { bookings: list.map(publicBooking_), counts: bookingCounts_(all, now, today) };
+  return { bookings: list.map(publicBooking_), counts: bookingCounts_(all, now, today, cfg) };
 }
 
 /* Escreve células da linha pelo nome da coluna (confere todas antes de gravar a primeira) */
@@ -770,6 +791,88 @@ function reopenBooking_(body){
   return updateBookingById_(body.id, (b, ctx) => {
     if(b.status !== 'concluido' && b.status !== 'faltou') return { error: 'ACAO_INVALIDA_PARA_STATUS' };
     writeBookingCells_(ctx.sheet, ctx.c, b.rowNumber, { status: 'confirmado', valorCobrado: '', formaPagamento: '', concluidoEm: '' });
+    return { ok:true };
+  });
+}
+
+/* ============================================================
+   LEMBRETES PELO WHATSAPP
+   O painel abre o WhatsApp do dono com a mensagem pronta; nada é
+   enviado automaticamente. Só recebe quem marcou o consentimento.
+   ============================================================ */
+function reminderHours_(cfg){
+  const n = Number(cfg && cfg.reminderHoursBefore);
+  return REMINDER_HOURS_OPTIONS.includes(n) ? n : REMINDER_HOURS_DEFAULT;
+}
+
+/* Endereço base do site, sempre com "/" no final; '' se ausente ou sem https */
+function normalizeSiteUrl_(v){
+  let url = toStr_(v);
+  if(!/^https:\/\/[^\s"'<>?#]+$/i.test(url)) return ''; // sem query/hash: o link do cliente vai no final
+  if(!url.endsWith('/')) url += '/';
+  return url;
+}
+
+/* Regra única de quem entra na lista de lembretes (lista e contadores) */
+function isReminderDue_(b, now, hours){
+  return b.status === 'confirmado'
+    && b.aceitaWhatsapp === true            // consentimento explícito do cliente
+    && !b.presencaConfirmada
+    && b.lembreteEnviadoEm === ''
+    && !!b.start && b.start > now
+    && b.start - now <= hours * 3600000
+    && b.token !== ''                       // sem token não há link para confirmar/cancelar
+    && toWaPhone_(b.phone) !== '';
+}
+
+/* "quinta-feira, 23/10" a partir de 'AAAA-MM-DD' (só aritmética de calendário, sem fuso) */
+function formatReminderDate_(dateStr){
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
+  if(!m) return dateStr;
+  const weekday = WEEKDAYS_PT[new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay()];
+  return `${weekday}, ${m[3]}/${m[2]}`;
+}
+
+/* Monta o texto do lembrete. Independente do painel: um gatilho automático pode reutilizar.
+   booking: { name, serviceName, date ('AAAA-MM-DD' no fuso tz_()), time, token }
+   cfg: objeto de readConfig_() */
+function buildReminderMessage_(booking, cfg){
+  const siteUrl = normalizeSiteUrl_(cfg.siteUrl);
+  if(!siteUrl) throw new Error('SITE_URL_NAO_CONFIGURADO');
+  const template = toStr_(cfg.reminderTemplate) ? String(cfg.reminderTemplate) : REMINDER_TEMPLATE_DEFAULT;
+  const values = {
+    nome: toStr_(booking.name).split(/\s+/)[0],
+    barbearia: toStr_(cfg.name),
+    servico: toStr_(booking.serviceName),
+    data: formatReminderDate_(toStr_(booking.date)),
+    hora: toStr_(booking.time),
+    link: `${siteUrl}agendamento.html#${toStr_(booking.token)}`,
+  };
+  // Placeholders desconhecidos ficam como estão
+  return template.replace(/\{(\w+)\}/g, (match, key) =>
+    Object.prototype.hasOwnProperty.call(values, key) ? values[key] : match);
+}
+
+function getReminders_(){
+  const cfg = readConfig_();
+  const all = readBookings_();
+  const now = new Date();
+  const hours = reminderHours_(cfg);
+  const reminders = all
+    .filter(b => isReminderDue_(b, now, hours))
+    .sort((a, b) => a.start - b.start)
+    .map(b => ({
+      id: b.id, date: b.date, time: b.time, serviceName: b.serviceName, name: b.name,
+      waPhone: toWaPhone_(b.phone),
+      message: buildReminderMessage_(b, cfg), // lança SITE_URL_NAO_CONFIGURADO se faltar o endereço
+    }));
+  return { reminders, counts: bookingCounts_(all, now, todayISO_(), cfg) };
+}
+
+function markReminderSent_(body){
+  return updateBookingById_(body.id, (b, ctx) => {
+    if(b.status !== 'confirmado') return { error: 'ACAO_INVALIDA_PARA_STATUS' };
+    writeBookingCells_(ctx.sheet, ctx.c, b.rowNumber, { lembreteEnviadoEm: new Date() }); // repetido: só atualiza
     return { ok:true };
   });
 }
@@ -980,7 +1083,7 @@ function getAdminData_(){
   try{ CalendarApp.getCalendarById(cfg.calendarId).getName(); }catch(e){ calendarOk = false; }
   // Os alertas não podem impedir a entrada no painel
   let counts = null;
-  try{ counts = bookingCounts_(readBookings_(), new Date(), todayISO_()); }catch(e){ Logger.log(`counts: ${e.message}`); }
+  try{ counts = bookingCounts_(readBookings_(), new Date(), todayISO_(), cfg); }catch(e){ Logger.log(`counts: ${e.message}`); }
 
   return {
     name: cfg.name, tagline: cfg.tagline, lede: cfg.lede,
@@ -988,14 +1091,37 @@ function getAdminData_(){
     address: cfg.address, mapLink: cfg.mapLink,
     services: listServices_(), hours: listHours_(),
     exceptions: listExceptions_().map(e => ({ ...e, dateLabel: formatDateLabel_(e.date) })),
+    siteUrl: normalizeSiteUrl_(cfg.siteUrl),
+    reminderHoursBefore: reminderHours_(cfg),
+    reminderTemplate: toStr_(cfg.reminderTemplate) ? cfg.reminderTemplate : REMINDER_TEMPLATE_DEFAULT,
+    reminderTemplateDefault: REMINDER_TEMPLATE_DEFAULT,
+    reminderHoursOptions: REMINDER_HOURS_OPTIONS,
     sheetsOk, calendarOk, counts,
   };
 }
 
 function saveInfo_(body){
+  // Valida as chaves de lembrete ANTES de gravar qualquer coisa
+  const reminder = {};
+  if(body.siteUrl !== undefined){
+    reminder.siteUrl = normalizeSiteUrl_(body.siteUrl);
+    if(!reminder.siteUrl || reminder.siteUrl.length > 500) return { error: 'DADOS_INVALIDOS' };
+  }
+  if(body.reminderHoursBefore !== undefined){
+    const n = Number(body.reminderHoursBefore);
+    if(!REMINDER_HOURS_OPTIONS.includes(n)) return { error: 'DADOS_INVALIDOS' };
+    reminder.reminderHoursBefore = String(n);
+  }
+  if(body.reminderTemplate !== undefined){
+    const t = typeof body.reminderTemplate === 'string' ? body.reminderTemplate.trim() : '';
+    if(!t || t.length > REMINDER_TEMPLATE_MAX) return { error: 'DADOS_INVALIDOS' };
+    reminder.reminderTemplate = t;
+  }
+
   ['name','tagline','lede','whatsapp','phone','instagram','address','mapLink'].forEach(k => {
     if(body[k] !== undefined) setConfigValue_(k, body[k]);
   });
+  Object.keys(reminder).forEach(k => setConfigValue_(k, reminder[k]));
   return { ok:true };
 }
 
@@ -1021,6 +1147,12 @@ function toNumberOrEmpty_(v){
   if(toStr_(v) === '') return '';
   const n = Number(v);
   return Number.isFinite(n) ? n : '';
+}
+/* Telefone → número para wa.me: só dígitos, com 55 se vier sem DDI (10 ou 11 dígitos).
+   Mesma regra de toWaPhone() em js/utils.js. */
+function toWaPhone_(phone){
+  const digits = String(phone ?? '').replace(/\D/g, '');
+  return (digits.length === 10 || digits.length === 11) ? '55' + digits : digits;
 }
 /* TRUE do Sheets ou o texto "true" */
 function toBool_(v){

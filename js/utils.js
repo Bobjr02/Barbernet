@@ -38,3 +38,10 @@ function formatDateLong(iso){
   const weekday = WEEKDAYS[new Date(y, m - 1, d).getDay()];
   return `${weekday}, ${pad(d)}/${pad(m)}/${y}`;
 }
+
+/* Telefone → número para wa.me: só dígitos, com 55 se vier sem DDI (10 ou 11 dígitos).
+   Mesma regra de toWaPhone_() no Code.gs. */
+function toWaPhone(phone){
+  const digits = String(phone ?? '').replace(/\D/g, '');
+  return (digits.length === 10 || digits.length === 11) ? '55' + digits : digits;
+}

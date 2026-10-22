@@ -163,7 +163,7 @@ function renderHours(data){
 function renderContacts(data){
   const grid = document.getElementById('contactGrid');
   const items = [];
-  if(data.whatsapp) items.push({label:'WhatsApp', value:data.whatsapp, href:`https://wa.me/${String(data.whatsapp).replace(/\D/g,'')}`});
+  if(data.whatsapp) items.push({label:'WhatsApp', value:data.whatsapp, href:`https://wa.me/${toWaPhone(data.whatsapp)}`});
   if(data.phone) items.push({label:'Telefone', value:data.phone, href:`tel:${String(data.phone).replace(/\D/g,'')}`});
   if(data.instagram){
     const handle = String(data.instagram).replace('@','');
