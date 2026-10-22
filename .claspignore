@@ -1,0 +1,4 @@
+# Envia ao Apps Script SOMENTE o backend. Todo o resto fica de fora.
+**/**
+!Code.gs
+!appsscript.json

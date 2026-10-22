@@ -1,0 +1,6 @@
+# clasp — configuração local e credenciais (nunca versionar)
+.clasp.json
+.clasprc.json
+.deploy-id
+creds.json
+client_secret*.json

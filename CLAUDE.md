@@ -22,7 +22,9 @@
 
 ## Como testar
 
-- **Backend (`Code.gs`):** as mudanças precisam ser **coladas manualmente** no editor do Apps Script e publicadas como **nova versão** do Web App (Implantar → Gerenciar implantações → Editar → Nova versão). Sem isso, o site continua usando a versão antiga.
+- **Backend (`Code.gs`):** as mudanças só valem no site depois de publicadas como **nova versão** da implantação existente do Web App. Isso é feito com `scripts/deploy.sh` (clasp push + redeploy pelo ID da implantação; a URL em `js/config.js` não muda). Alternativa manual: colar no editor do Apps Script → Implantar → Gerenciar implantações → Editar → Nova versão.
+  - **Rode `scripts/deploy.sh` SOMENTE quando o usuário pedir explicitamente.** Nunca rode o deploy, `clasp push`, `clasp redeploy` ou `clasp login` por conta própria. A autenticação do clasp é do usuário.
+  - `.clasp.json`, `.deploy-id` e `~/.clasprc.json` são locais e **não** vão para o repositório (estão no `.gitignore`).
 - **Frontend:** sirva a pasta localmente e abra no navegador:
 
   ```bash

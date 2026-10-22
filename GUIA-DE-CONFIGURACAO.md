@@ -91,6 +91,77 @@ Se a sua planilha foi criada com uma versão anterior do BarberNet:
 
 ---
 
+## Deploy pelo Codespace (opcional)
+
+Em vez de colar o `Code.gs` no editor a cada mudança, dá para publicar direto do Codespace com o [clasp](https://github.com/google/clasp) (versão 3.x). O script `scripts/deploy.sh` envia **somente** `Code.gs` e `appsscript.json` e atualiza a **implantação que já existe**. Por isso a URL do Web App (a mesma de `js/config.js`) **não muda**.
+
+> **Importante:** faça tudo com a **mesma conta Google** dona da planilha e do script. Com outra conta, o clasp não encontra o projeto, ou o deploy falha por falta de permissão.
+
+### 1. Ativar a Apps Script API (uma vez)
+
+Abra <https://script.google.com/home/usersettings>, logado na conta dona do script, e ative **Google Apps Script API**. Depois de ativar, pode levar alguns minutos para funcionar.
+
+### 2. Anotar os dois IDs
+
+- **scriptId:** no editor do Apps Script, clique na **engrenagem (Configurações do projeto)**. Em **IDs**, copie o **ID do script**.
+- **ID da implantação:** em **Implantar → Gerenciar implantações**, selecione a implantação do *Aplicativo da Web* e copie o **ID da implantação** (começa com `AKfycb...`). Ele é o trecho entre `/s/` e `/exec` da URL que está em `js/config.js`. Use o ID da implantação ativa, **não** o da "implantação de teste" (`/dev`).
+
+### 3. Conferir o bloco `webapp` no manifesto (uma vez)
+
+Quando você publicou o Web App pelo editor, o Google acrescentou ao `appsscript.json` remoto um bloco `"webapp"`. Esse bloco guarda quem executa o app e quem pode acessá-lo. O `appsscript.json` deste repositório precisa ter o mesmo bloco, porque o deploy sobrescreve o manifesto remoto com o local. Sem ele, a nova versão perde a configuração de Web App. O `scripts/deploy.sh` se recusa a rodar se o bloco faltar.
+
+1. No editor do Apps Script, abra o `appsscript.json`. Se ele não aparecer, veja o item 5 do Passo 1.
+2. Copie o bloco `"webapp": { ... }` para o `appsscript.json` deste projeto. Com as opções do Passo 3, ele costuma ser:
+   ```json
+   "webapp": {
+     "executeAs": "USER_DEPLOYING",
+     "access": "ANYONE_ANONYMOUS"
+   }
+   ```
+3. Faça commit da mudança.
+
+### 4. Fazer o login do clasp dentro do Codespace
+
+O Codespace não tem navegador próprio. Por isso, use o login sem servidor local:
+
+```bash
+clasp login --no-localhost
+```
+
+1. O clasp mostra a mensagem `Authorize clasp by visiting this url:` seguida de um link. Abra esse link no navegador do seu computador.
+2. Entre com a **conta dona da planilha e do script** e clique em **Permitir**.
+3. No fim, o navegador tenta abrir um endereço `http://localhost:.../?code=...&state=...` e mostra um erro do tipo *"Não é possível acessar esse site"*. **Isso é esperado.**
+4. Copie a **URL inteira** da barra de endereços desse erro, incluindo `code=` e `state=`. Cole no terminal, onde o clasp pergunta `After authorizing, copy the URL from your browser and paste it here:`, e tecle Enter.
+5. Confira com `clasp show-authorized-user`.
+
+As credenciais ficam em `~/.clasprc.json`, fora do repositório. Nunca faça commit desse arquivo nem o compartilhe. Para sair: `clasp logout`.
+
+### 5. Criar `.clasp.json` e `.deploy-id`
+
+Na raiz do projeto:
+
+```bash
+cp .clasp.json.example .clasp.json
+# edite .clasp.json e troque COLE_AQUI pelo scriptId do item 2
+echo "AKfycb...SEU_ID_DA_IMPLANTACAO" > .deploy-id
+```
+
+Os dois arquivos estão no `.gitignore` e não vão para o GitHub. Em vez do `.deploy-id`, você também pode usar a variável `DEPLOYMENT_ID=...`.
+
+### 6. Publicar
+
+1. Faça commit das mudanças em `Code.gs`/`appsscript.json`. O script se recusa a publicar alterações não commitadas.
+2. Rode:
+   ```bash
+   scripts/deploy.sh
+   ```
+3. O script envia os arquivos (`clasp push`) e cria uma nova versão com a descrição `deploy AAAA-MM-DD HH:MM @ <commit>`. Depois aponta a implantação existente para essa versão (`clasp redeploy`).
+4. No final, ele imprime a URL do Web App e a compara com a de `js/config.js`. Se aparecer **OK**, o site já está usando o código novo.
+
+Se alguma função nova precisar de permissões novas do Google (Calendar, Gmail etc.), abra o editor do Apps Script e execute qualquer função uma vez para autorizar.
+
+---
+
 ## Perguntas comuns
 
 **Preciso pagar alguma coisa pro Google?**
