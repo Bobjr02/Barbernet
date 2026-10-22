@@ -29,3 +29,12 @@ function safeUrl(u){
 function richText(s){
   return esc(s).replace(/&lt;(\/?(?:em|strong)|br)&gt;/gi, (_, tag) => `<${tag.toLowerCase()}>`);
 }
+
+function pad(n){ return String(n).padStart(2,'0'); }
+
+/* 'AAAA-MM-DD' → 'Sexta-feira, 24/10/2026' (sem fuso: monta a data local a partir dos números) */
+function formatDateLong(iso){
+  const [y, m, d] = iso.split('-').map(Number);
+  const weekday = WEEKDAYS[new Date(y, m - 1, d).getDay()];
+  return `${weekday}, ${pad(d)}/${pad(m)}/${y}`;
+}

@@ -23,14 +23,26 @@ const SHEET_BOOKINGS    = 'Agendamentos';
 
 const SLOT_STEP_MINUTES = 30; // granularidade dos horários oferecidos
 
-/* Colunas que precisam ficar em formato texto ('@') para o Sheets não
-   converter "09:00" em Date, telefones/senhas em número etc.
+/* Cabeçalho da aba Agendamentos. Colunas novas entram SEMPRE no final
+   (planilhas antigas recebem as que faltam via migrarAgendamentosV2). */
+const BOOKING_HEADERS = [
+  'id','data','hora','duracao','servicoId','servicoNome','nome','telefone','nota','status','eventoId','criadoEm',
+  'preco','token','aceitaWhatsapp','presencaConfirmadaEm','canceladoPor','valorCobrado','formaPagamento','concluidoEm','lembreteEnviadoEm',
+];
+/* Status: 'confirmado' (agendado e ativo), 'cancelado', 'concluido', 'faltou' */
+const BUSY_STATUSES = ['confirmado', 'concluido']; // ocupam o horário; cancelado e faltou liberam
+
+/* Colunas (pelo nome do cabeçalho) que precisam ficar em formato texto ('@')
+   para o Sheets não converter "09:00" em Date, telefones/senhas em número etc.
    conv(v, tz): como normalizar o valor já existente na migração. */
 const TEXT_COLUMNS = {
-  [SHEET_CONFIG]:     [{ col:'B', conv:v => toStr_(v) }],
-  [SHEET_HOURS]:      [{ col:'C', conv:(v,tz) => toHHmm_(v,tz) }, { col:'D', conv:(v,tz) => toHHmm_(v,tz) }],
-  [SHEET_EXCEPTIONS]: [{ col:'B', conv:(v,tz) => toISODate_(v,tz) }, { col:'D', conv:(v,tz) => toHHmm_(v,tz) }, { col:'E', conv:(v,tz) => toHHmm_(v,tz) }],
-  [SHEET_BOOKINGS]:   [{ col:'B', conv:(v,tz) => toISODate_(v,tz) }, { col:'C', conv:(v,tz) => toHHmm_(v,tz) }, { col:'H', conv:v => toStr_(v) }],
+  [SHEET_CONFIG]:     [{ col:'valor', conv:v => toStr_(v) }],
+  [SHEET_HOURS]:      [{ col:'abre', conv:(v,tz) => toHHmm_(v,tz) }, { col:'fecha', conv:(v,tz) => toHHmm_(v,tz) }],
+  [SHEET_EXCEPTIONS]: [{ col:'data', conv:(v,tz) => toISODate_(v,tz) }, { col:'abre', conv:(v,tz) => toHHmm_(v,tz) }, { col:'fecha', conv:(v,tz) => toHHmm_(v,tz) }],
+  [SHEET_BOOKINGS]:   [
+    { col:'data', conv:(v,tz) => toISODate_(v,tz) }, { col:'hora', conv:(v,tz) => toHHmm_(v,tz) }, { col:'telefone', conv:v => toStr_(v) },
+    { col:'token', conv:v => toStr_(v) }, { col:'canceladoPor', conv:v => toStr_(v) }, { col:'formaPagamento', conv:v => toStr_(v) },
+  ],
 };
 
 /* ============================================================
@@ -44,7 +56,9 @@ function setup(){
   ensureSheet_(ss, SHEET_SERVICES, ['id','nome','preco','duracao','ativo']);
   applyTextFormats_(ensureSheet_(ss, SHEET_HOURS, ['diaSemana','ativo','abre','fecha']));
   applyTextFormats_(ensureSheet_(ss, SHEET_EXCEPTIONS, ['id','data','tipo','abre','fecha','nota']));
-  applyTextFormats_(ensureSheet_(ss, SHEET_BOOKINGS, ['id','data','hora','duracao','servicoId','servicoNome','nome','telefone','nota','status','eventoId','criadoEm']));
+  const bookings = ensureSheet_(ss, SHEET_BOOKINGS, BOOKING_HEADERS);
+  ensureColumns_(bookings, BOOKING_HEADERS);
+  applyTextFormats_(bookings);
 
   // Config padrão (só cria se ainda não existir)
   const cfg = getConfigSheet_();
@@ -101,9 +115,47 @@ function ensureSheet_(ss, name, headers){
 
 /* Aplica formato texto às colunas de TEXT_COLUMNS (idempotente) */
 function applyTextFormats_(sheet){
+  const c = cols_(sheet);
   (TEXT_COLUMNS[sheet.getName()] || []).forEach(({ col }) => {
-    sheet.getRange(`${col}:${col}`).setNumberFormat('@');
+    if(c[col] === undefined) return;
+    sheet.getRange(1, c[col] + 1, sheet.getMaxRows(), 1).setNumberFormat('@');
   });
+}
+
+/* Mapeia o cabeçalho da aba para índices (base 0): { id:0, data:1, ... } */
+function cols_(sheet){
+  const c = {};
+  const lastCol = sheet.getLastColumn();
+  if(!lastCol) return c;
+  sheet.getRange(1, 1, 1, lastCol).getValues()[0].forEach((h, i) => {
+    const name = toStr_(h);
+    if(name && c[name] === undefined) c[name] = i;
+  });
+  return c;
+}
+
+/* Garante que as colunas usadas existem; senão a planilha precisa da migração */
+function requireCols_(c, names){
+  const missing = names.filter(n => c[n] === undefined);
+  if(missing.length){
+    Logger.log(`Colunas ausentes em ${SHEET_BOOKINGS}: ${missing.join(', ')} — rode migrarAgendamentosV2()`);
+    throw new Error('PLANILHA_DESATUALIZADA');
+  }
+  return c;
+}
+
+/* Acrescenta AO FINAL as colunas do cabeçalho que faltarem. Retorna os nomes adicionados. */
+function ensureColumns_(sheet, headers){
+  const c = cols_(sheet);
+  const missing = headers.filter(h => c[h] === undefined);
+  if(missing.length){
+    sheet.getRange(1, sheet.getLastColumn() + 1, 1, missing.length).setValues([missing]);
+  }
+  return missing;
+}
+
+function getBookingsSheet_(){
+  return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_BOOKINGS);
 }
 
 /* ============================================================
@@ -121,23 +173,29 @@ function migrarFormatos(){
       return;
     }
     const lastRow = sheet.getLastRow();
+    const c = cols_(sheet);
     let fixed = 0;
     TEXT_COLUMNS[name].forEach(({ col, conv }) => {
-      if(lastRow < 2){ sheet.getRange(`${col}:${col}`).setNumberFormat('@'); return; }
-      const range = sheet.getRange(`${col}2:${col}${lastRow}`);
+      if(c[col] === undefined){
+        Logger.log(`${name}: coluna ${col} não encontrada, ignorada.`);
+        return;
+      }
+      const colRange = sheet.getRange(1, c[col] + 1, sheet.getMaxRows(), 1);
+      if(lastRow < 2){ colRange.setNumberFormat('@'); return; }
+      const range = sheet.getRange(2, c[col] + 1, lastRow - 1, 1);
       // Lê ANTES de mudar o formato, enquanto o valor ainda é Date/número
       const values = range.getValues();
       const out = values.map(([v]) => {
         let s = conv(v, sheetTz);
         if(s === '' && toStr_(v) !== ''){
           // não reconheceu o formato: preserva o texto em vez de apagar
-          Logger.log(`${name}!${col}: valor não reconhecido mantido como texto: ${v}`);
+          Logger.log(`${name}.${col}: valor não reconhecido mantido como texto: ${v}`);
           s = toStr_(v);
         }
         if(typeof v !== 'string' || s !== v) fixed++;
         return [s];
       });
-      sheet.getRange(`${col}:${col}`).setNumberFormat('@');
+      colRange.setNumberFormat('@');
       range.setValues(out);
     });
     Logger.log(`${name}: ${fixed} célula(s) corrigida(s).`);
@@ -147,6 +205,58 @@ function migrarFormatos(){
     ss.setSpreadsheetTimeZone(tz_());
     Logger.log(`Fuso da planilha alterado de ${sheetTz} para ${tz_()}.`);
   }
+}
+
+/* Agendamentos V2: colunas de status/preço/token. Idempotente: pode rodar de novo. */
+function migrarAgendamentosV2(){
+  const sheet = getBookingsSheet_();
+  if(!sheet){
+    Logger.log(`${SHEET_BOOKINGS}: aba não encontrada. Rode setup() primeiro.`);
+    return;
+  }
+  const added = ensureColumns_(sheet, BOOKING_HEADERS);
+  Logger.log(added.length ? `Colunas adicionadas: ${added.join(', ')}` : 'Nenhuma coluna nova.');
+  applyTextFormats_(sheet);
+
+  const c = cols_(sheet);
+  const lastRow = sheet.getLastRow();
+  if(lastRow < 2){
+    Logger.log('Nenhum agendamento para atualizar.');
+    return;
+  }
+  const rows = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
+  const prices = {};
+  listServices_().forEach(s => prices[toStr_(s.id)] = s.price);
+  const now = new Date();
+
+  let priceFilled = 0, tokensCreated = 0, changedRows = 0;
+  const priceCol = [], tokenCol = [];
+  rows.forEach(r => {
+    let changed = false;
+    let price = r[c.preco];
+    if(toStr_(price) === '' && toStr_(r[c.id])){
+      const current = prices[toStr_(r[c.servicoId])];
+      if(current !== undefined && toStr_(current) !== ''){
+        price = Number(current);
+        priceFilled++; changed = true;
+      }
+    }
+    let token = toStr_(r[c.token]);
+    if(!token && toStr_(r[c.id]) && toStr_(r[c.status]) === 'confirmado'){
+      const start = bookingStart_(toISODate_(r[c.data]), toHHmm_(r[c.hora]));
+      if(start && start > now){
+        token = newBookingToken_();
+        tokensCreated++; changed = true;
+      }
+    }
+    if(changed) changedRows++;
+    priceCol.push([price]);
+    tokenCol.push([token]);
+  });
+  sheet.getRange(2, c.preco + 1, rows.length, 1).setValues(priceCol);
+  sheet.getRange(2, c.token + 1, rows.length, 1).setValues(tokenCol);
+  SpreadsheetApp.flush();
+  Logger.log(`${changedRows} linha(s) alterada(s): ${priceFilled} preço(s) preenchido(s), ${tokensCreated} token(s) gerado(s).`);
 }
 
 /* ============================================================
@@ -159,6 +269,7 @@ function doGet(e){
     switch(action){
       case 'getPublicData': result = getPublicData_(); break;
       case 'getAvailability': result = getAvailability_(e.parameter.date, e.parameter.serviceId); break;
+      case 'getBookingByToken': result = getBookingByToken_(e.parameter.token); break;
       // Ações administrativas só existem no doPost (token no corpo, nunca na URL)
       default: result = { error: 'AÇÃO_DESCONHECIDA' };
     }
@@ -175,6 +286,8 @@ function doPost(e){
     let result;
     switch(action){
       case 'createBooking': result = createBooking_(body); break;
+      case 'confirmPresence': result = confirmPresence_(body); break;
+      case 'cancelByClient': result = cancelByClient_(body); break;
       case 'login': result = login_(body); break;
       case 'logout': result = logout_(body); break;
       case 'getAdminData': requireAuth_(body); result = getAdminData_(); break;
@@ -341,14 +454,51 @@ function removeException_(id){
    AGENDAMENTOS
    ============================================================ */
 function listBookings_(){
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_BOOKINGS);
+  const sheet = getBookingsSheet_();
+  const c = requireCols_(cols_(sheet), ['id','data','hora','duracao','servicoId','servicoNome','nome','telefone','nota','status']);
   const rows = sheet.getDataRange().getValues().slice(1);
-  return rows.filter(r => r[0] && r[9] !== 'cancelado')
+  return rows.filter(r => r[c.id] && r[c.status] !== 'cancelado')
     .map(r => ({
-      id:toStr_(r[0]), date:toISODate_(r[1]), time:toHHmm_(r[2]), duration:Number(r[3]),
-      serviceId:toStr_(r[4]), serviceName:toStr_(r[5]), name:toStr_(r[6]), phone:toStr_(r[7]), note:toStr_(r[8]), status:toStr_(r[9]),
+      id:toStr_(r[c.id]), date:toISODate_(r[c.data]), time:toHHmm_(r[c.hora]), duration:Number(r[c.duracao]),
+      serviceId:toStr_(r[c.servicoId]), serviceName:toStr_(r[c.servicoNome]), name:toStr_(r[c.nome]),
+      phone:toStr_(r[c.telefone]), note:toStr_(r[c.nota]), status:toStr_(r[c.status]),
     }))
     .sort((a,b) => (a.date+a.time).localeCompare(b.date+b.time));
+}
+
+/* Grava uma linha montada pelo nome das colunas (as não informadas ficam vazias) */
+function appendBooking_(sheet, c, values){
+  const row = new Array(sheet.getLastColumn()).fill('');
+  Object.keys(values).forEach(k => { row[c[k]] = values[k]; });
+  sheet.appendRow(row);
+}
+
+/* Token do link pessoal do cliente: 64 caracteres hexadecimais */
+const BOOKING_TOKEN_PATTERN = /^[0-9a-f]{64}$/;
+function newBookingToken_(){
+  return (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '');
+}
+
+/* Início do agendamento no fuso do script; null se data/hora ilegíveis */
+function bookingStart_(dateStr, timeStr){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(dateStr) || !timeStr) return null;
+  const d = new Date(`${dateStr}T${timeStr}:00`);
+  return isNaN(d) ? null : d;
+}
+
+/* Executa fn com o lock do script (o mesmo do createBooking_) */
+function withScriptLock_(fn){
+  const lock = LockService.getScriptLock();
+  try{
+    lock.waitLock(10000);
+  }catch(err){
+    return { error: 'SISTEMA_OCUPADO' };
+  }
+  try{
+    return fn();
+  }finally{
+    lock.releaseLock();
+  }
 }
 
 const MAX_DAYS_AHEAD = 60;          // agendamento até 60 dias à frente
@@ -361,6 +511,7 @@ function createBooking_(body){
   const name = String(body.name == null ? '' : body.name).trim().slice(0, 60);
   const phone = String(body.phone == null ? '' : body.phone).trim().slice(0, 20);
   const note = String(body.note == null ? '' : body.note).trim().slice(0, 200);
+  const aceitaWhatsapp = body.aceitaWhatsapp === true;
   if(!name || !phone){
     return { error: 'DADOS_INVALIDOS' };
   }
@@ -381,6 +532,9 @@ function createBooking_(body){
   const services = listServices_();
   const service = services.find(s => s.id === serviceId);
   if(!service) return { error: 'SERVICO_NAO_ENCONTRADO' };
+
+  const sheet = getBookingsSheet_();
+  const c = requireCols_(cols_(sheet), BOOKING_HEADERS);
 
   // Uma confirmação por vez: sem o lock, duas requisições simultâneas poderiam
   // ver o mesmo horário livre e gravar as duas.
@@ -423,34 +577,115 @@ function createBooking_(body){
       // segue mesmo se a agenda falhar — o agendamento na planilha é a fonte da verdade
     }
 
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_BOOKINGS);
     const id = Utilities.getUuid();
-    sheet.appendRow([id, date, time, service.duration, service.id, service.name, name, phone, note || '', 'confirmado', eventId, new Date()]);
+    const token = newBookingToken_();
+    // Preço congelado: vale o do serviço no momento do agendamento
+    appendBooking_(sheet, c, {
+      id, data: date, hora: time, duracao: service.duration, servicoId: service.id, servicoNome: service.name,
+      nome: name, telefone: phone, nota: note || '', status: 'confirmado', eventoId: eventId, criadoEm: new Date(),
+      preco: Number(service.price), token, aceitaWhatsapp,
+    });
     SpreadsheetApp.flush(); // grava antes de liberar o lock, para o próximo já enxergar esta linha
-    return { ok:true, id };
+    return { ok:true, id, token };
   }finally{
     lock.releaseLock();
   }
 }
 
 function cancelBooking_(id){
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_BOOKINGS);
+  const sheet = getBookingsSheet_();
+  const c = requireCols_(cols_(sheet), ['id','status','eventoId','canceladoPor']);
   const rows = sheet.getDataRange().getValues();
   for(let i=1;i<rows.length;i++){
-    if(rows[i][0] === id){
-      sheet.getRange(i+1,10).setValue('cancelado');
-      const eventId = rows[i][10];
-      if(eventId){
-        try{
-          const cfg = readConfig_();
-          const cal = CalendarApp.getCalendarById(cfg.calendarId);
-          cal.getEventById(eventId).deleteEvent();
-        }catch(err){ /* evento pode já não existir */ }
-      }
+    if(rows[i][c.id] === id){
+      cancelBookingRow_(sheet, c, i + 1, rows[i], 'dono');
       return { ok:true };
     }
   }
   return { error: 'AGENDAMENTO_NAO_ENCONTRADO' };
+}
+
+/* Marca a linha como cancelada e remove o evento da agenda */
+function cancelBookingRow_(sheet, c, rowNumber, row, by){
+  sheet.getRange(rowNumber, c.status + 1).setValue('cancelado');
+  sheet.getRange(rowNumber, c.canceladoPor + 1).setValue(by);
+  const eventId = row[c.eventoId];
+  if(eventId){
+    try{
+      const cfg = readConfig_();
+      const cal = CalendarApp.getCalendarById(cfg.calendarId);
+      cal.getEventById(eventId).deleteEvent();
+    }catch(err){ /* evento pode já não existir */ }
+  }
+}
+
+/* ============================================================
+   AUTOGESTÃO DO CLIENTE (link pessoal com token, sem login)
+   ============================================================ */
+/* Localiza o agendamento pelo token; null se não existir */
+function findBookingByToken_(token){
+  token = toStr_(token).toLowerCase();
+  if(!BOOKING_TOKEN_PATTERN.test(token)) return null;
+  const sheet = getBookingsSheet_();
+  const c = requireCols_(cols_(sheet), BOOKING_HEADERS);
+  const rows = sheet.getDataRange().getValues();
+  for(let i=1;i<rows.length;i++){
+    if(toStr_(rows[i][c.token]) === token) return { sheet, c, rowNumber: i + 1, row: rows[i] };
+  }
+  return null;
+}
+
+/* Valida se o cliente ainda pode mexer no agendamento; devolve o erro ou null */
+function clientActionError_(found){
+  const { c, row } = found;
+  if(toStr_(row[c.status]) !== 'confirmado') return 'AGENDAMENTO_INATIVO';
+  const start = bookingStart_(toISODate_(row[c.data]), toHHmm_(row[c.hora]));
+  if(!start || start <= new Date()) return 'PRAZO_ENCERRADO';
+  return null;
+}
+
+/* Só dados do agendamento e da barbearia — nada que identifique o cliente */
+function getBookingByToken_(token){
+  const found = findBookingByToken_(token);
+  if(!found) return { error: 'AGENDAMENTO_NAO_ENCONTRADO' };
+  const { c, row } = found;
+  const cfg = readConfig_();
+  return {
+    serviceName: toStr_(row[c.servicoNome]),
+    date: toISODate_(row[c.data]),
+    time: toHHmm_(row[c.hora]),
+    status: toStr_(row[c.status]),
+    presencaConfirmada: toStr_(row[c.presencaConfirmadaEm]) !== '',
+    shopName: cfg.name || '',
+    shopWhatsapp: cfg.whatsapp || '',
+  };
+}
+
+function confirmPresence_(body){
+  return withScriptLock_(() => {
+    const found = findBookingByToken_(body.token);
+    if(!found) return { error: 'AGENDAMENTO_NAO_ENCONTRADO' };
+    const { sheet, c, rowNumber, row } = found;
+    if(toStr_(row[c.status]) !== 'confirmado') return { error: 'AGENDAMENTO_INATIVO' };
+    if(toStr_(row[c.presencaConfirmadaEm]) !== '') return { ok:true }; // já confirmada
+    const err = clientActionError_(found);
+    if(err) return { error: err };
+    sheet.getRange(rowNumber, c.presencaConfirmadaEm + 1).setValue(new Date());
+    SpreadsheetApp.flush();
+    return { ok:true };
+  });
+}
+
+function cancelByClient_(body){
+  return withScriptLock_(() => {
+    const found = findBookingByToken_(body.token);
+    if(!found) return { error: 'AGENDAMENTO_NAO_ENCONTRADO' };
+    const err = clientActionError_(found);
+    if(err) return { error: err };
+    cancelBookingRow_(found.sheet, found.c, found.rowNumber, found.row, 'cliente');
+    SpreadsheetApp.flush(); // libera o horário antes de soltar o lock
+    return { ok:true };
+  });
 }
 
 /* ============================================================
@@ -521,20 +756,21 @@ function buildSlotCandidates_(dateStr, open, close, duration){
 }
 
 function getBusyRanges_(dateStr){
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_BOOKINGS);
+  const sheet = getBookingsSheet_();
+  const c = requireCols_(cols_(sheet), ['id','data','hora','duracao','status']);
   const rows = sheet.getDataRange().getValues().slice(1);
   return rows
-    .filter(r => r[0] && r[1] && toStr_(r[9]) !== 'cancelado' && toISODate_(r[1]) === dateStr)
+    .filter(r => r[c.id] && r[c.data] && BUSY_STATUSES.includes(toStr_(r[c.status])) && toISODate_(r[c.data]) === dateStr)
     .map(r => {
-      const time = toHHmm_(r[2]);
+      const time = toHHmm_(r[c.hora]);
       if(!time){
         // hora ilegível: bloqueia o dia inteiro para não permitir agendamento duplo
-        Logger.log(`Agendamento ${r[0]} com hora inválida: ${r[2]}`);
+        Logger.log(`Agendamento ${r[c.id]} com hora inválida: ${r[c.hora]}`);
         const start = new Date(`${dateStr}T00:00:00`);
         return { start, end: new Date(start.getTime() + 86400000) };
       }
       const start = new Date(`${dateStr}T${time}:00`);
-      const end = new Date(start.getTime() + Number(r[3])*60000);
+      const end = new Date(start.getTime() + Number(r[c.duracao])*60000);
       return { start, end };
     });
 }

@@ -11,7 +11,6 @@ const state = {
   selectedTime: null,
 };
 
-function pad(n){ return String(n).padStart(2,'0'); }
 function todayISO(){
   const d = new Date();
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
@@ -287,6 +286,7 @@ document.getElementById('confirmBooking').addEventListener('click', async () => 
   const name = document.getElementById('clientName').value.trim();
   const phone = document.getElementById('clientPhone').value.trim();
   const note = document.getElementById('clientNote').value.trim();
+  const aceitaWhatsapp = document.getElementById('clientWhatsOptIn').checked;
   const result = document.getElementById('bookingResult');
   const btn = document.getElementById('confirmBooking');
 
@@ -300,16 +300,16 @@ document.getElementById('confirmBooking').addEventListener('click', async () => 
   btn.disabled = true;
   btn.textContent = 'Confirmando…';
   try{
-    await api('createBooking', {}, 'POST', {
+    const res = await api('createBooking', {}, 'POST', {
       serviceId: state.selectedService.id,
       date: state.selectedDate,
       time: state.selectedTime,
-      name, phone, note,
+      name, phone, note, aceitaWhatsapp,
     });
     // O botão continua desabilitado até o diálogo fechar e o fluxo reiniciar
     btn.textContent = 'Confirmado ✓';
     result.innerHTML = '';
-    openBookingDialog();
+    openBookingDialog(res.token);
   }catch(err){
     console.error(err);
     const msg = BOOKING_ERRORS[err.message] || 'Não foi possível confirmar agora. Tente novamente em instantes.';
@@ -324,13 +324,11 @@ const DIALOG_SECONDS = 10;
 let dialogTimer = null;
 let dialogPendingReset = false; // true enquanto a confirmação atual ainda não reiniciou o fluxo
 
-function formatDateLong(iso){
-  const [y, m, d] = iso.split('-').map(Number);
-  const weekday = WEEKDAYS[new Date(y, m - 1, d).getDay()];
-  return `${weekday}, ${pad(d)}/${pad(m)}/${y}`;
+function manageUrl(token){
+  return new URL(`agendamento.html#${token}`, location.href).href;
 }
 
-function openBookingDialog(){
+function openBookingDialog(token){
   const dialog = document.getElementById('bookingDialog');
   const countdown = document.getElementById('dialogCountdown');
   const service = ((state.data && state.data.services) || [])
@@ -339,6 +337,13 @@ function openBookingDialog(){
   document.getElementById('dialogService').textContent = service ? service.name : '';
   document.getElementById('dialogDate').textContent = formatDateLong(state.selectedDate);
   document.getElementById('dialogTime').textContent = state.selectedTime;
+
+  const manage = document.getElementById('dialogManage');
+  manage.hidden = !token;
+  if(token){
+    document.getElementById('dialogManageLink').href = manageUrl(token);
+    document.getElementById('dialogCopyLink').textContent = 'Copiar link';
+  }
 
   let remaining = DIALOG_SECONDS;
   countdown.textContent = `Fechando em ${remaining}s`;
@@ -369,6 +374,27 @@ function onBookingDialogClose(){
 document.getElementById('dialogClose').addEventListener('click', () => {
   document.getElementById('bookingDialog').close();
 });
+
+// Quem vai copiar ou abrir o link não pode ter o diálogo fechado no meio
+function stopDialogCountdown(){
+  clearInterval(dialogTimer);
+  dialogTimer = null;
+  document.getElementById('dialogCountdown').textContent = '';
+}
+document.getElementById('dialogManageLink').addEventListener('click', stopDialogCountdown);
+
+document.getElementById('dialogCopyLink').addEventListener('click', async () => {
+  stopDialogCountdown();
+  const btn = document.getElementById('dialogCopyLink');
+  const url = document.getElementById('dialogManageLink').href;
+  try{
+    await navigator.clipboard.writeText(url);
+    btn.textContent = 'Link copiado ✓';
+  }catch(err){
+    // Sem permissão/HTTPS: o cliente ainda pode abrir o link e salvá-lo
+    console.error(err);
+  }
+});
 document.getElementById('bookingDialog').addEventListener('close', onBookingDialogClose);
 
 function resetBooking(){
@@ -379,6 +405,7 @@ function resetBooking(){
   document.getElementById('clientName').value = '';
   document.getElementById('clientPhone').value = '';
   document.getElementById('clientNote').value = '';
+  document.getElementById('clientWhatsOptIn').checked = false;
   document.getElementById('dateInput').value = ''; // permite que a escolha do serviço preencha hoje de novo
   document.getElementById('slotsGrid').innerHTML = '';
   document.getElementById('dateHint').textContent = '';

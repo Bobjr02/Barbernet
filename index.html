@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>BarberNet</title>
 <meta name="description" content="Agende seu horário na barbearia em poucos cliques.">
-<link rel="stylesheet" href="css/style.css?v=20261021-1">
+<link rel="stylesheet" href="css/style.css?v=20261022-2">
 </head>
 <body>
 
@@ -139,6 +139,10 @@
           <label class="field-label" for="clientNote">Observação (opcional)</label>
           <textarea id="clientNote" placeholder="Alguma preferência para o atendimento?"></textarea>
         </div>
+        <label class="check-row">
+          <input type="checkbox" id="clientWhatsOptIn">
+          <span>Quero receber lembrete do agendamento pelo WhatsApp</span>
+        </label>
         <div style="display:flex;gap:12px">
           <button class="btn btn-ghost" data-back="2">Voltar</button>
           <button class="btn btn-primary" id="confirmBooking">Confirmar agendamento</button>
@@ -169,6 +173,10 @@
     <div><dt>Horário</dt><dd id="dialogTime"></dd></div>
   </dl>
   <p class="booking-dialog-note">Anote ou tire um print desta tela.</p>
+  <div class="booking-dialog-manage" id="dialogManage" hidden>
+    <a id="dialogManageLink" href="#" target="_blank" rel="noopener">Gerenciar meu agendamento</a>
+    <button type="button" class="btn btn-ghost" id="dialogCopyLink">Copiar link</button>
+  </div>
   <p class="booking-dialog-countdown" id="dialogCountdown">Fechando em 10s</p>
   <button type="button" class="btn btn-primary btn-block" id="dialogClose">Fechar</button>
 </dialog>
@@ -180,8 +188,8 @@
   </div>
 </footer>
 
-<script src="js/utils.js?v=20261021-1"></script>
-<script src="js/config.js?v=20261021-1"></script>
-<script src="js/site.js?v=20261021-1"></script>
+<script src="js/utils.js?v=20261022-2"></script>
+<script src="js/config.js?v=20261022-2"></script>
+<script src="js/site.js?v=20261022-2"></script>
 </body>
 </html>
