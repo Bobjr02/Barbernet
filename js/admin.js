@@ -1,29 +1,42 @@
 /* ============================================================
    BarberNet — Lógica do painel do dono
-   Observação: por simplicidade e segurança, a senha fica apenas
-   em memória (some ao fechar/recarregar a aba). Isso evita
-   qualquer armazenamento sensível no navegador.
+   Observação: a senha só é enviada no login e descartada em
+   seguida. As demais chamadas usam um token de sessão (6 h) que
+   fica apenas em memória (some ao fechar/recarregar a aba).
    ============================================================ */
 
 const adminState = {
   baseUrl: '',
-  pass: '',
+  token: '',
   data: null,
 };
 
-async function adminApi(action, params = {}, method = 'GET', body = null){
-  let url = `${adminState.baseUrl}?action=${encodeURIComponent(action)}&pass=${encodeURIComponent(adminState.pass)}`;
-  Object.entries(params).forEach(([k,v]) => url += `&${k}=${encodeURIComponent(v)}`);
-  const opts = { method };
-  if(method === 'POST'){
-    opts.headers = { 'Content-Type': 'text/plain;charset=utf-8' };
-    opts.body = JSON.stringify(body || {});
-  }
-  const res = await fetch(url, opts);
+/* Sempre POST: token e dados vão no corpo, nunca na URL */
+async function adminApi(action, data = {}){
+  const res = await fetch(`${adminState.baseUrl}?action=${encodeURIComponent(action)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ ...data, token: adminState.token }),
+  });
   if(!res.ok) throw new Error('REQUEST_FAILED');
   const json = await res.json();
+  if(json.error === 'SESSAO_EXPIRADA') showLogin('Sua sessão expirou. Entre novamente.');
   if(json.error) throw new Error(json.error);
   return json;
+}
+
+/* Erros de sessão já levaram de volta ao login; não mostra outro alerta */
+function isSessionError(err){
+  return err && err.message === 'SESSAO_EXPIRADA';
+}
+
+function showLogin(message){
+  adminState.token = '';
+  adminState.data = null;
+  ['dadosMsg','hoursMsg'].forEach(id => document.getElementById(id).innerHTML = '');
+  document.getElementById('adminShell').style.display = 'none';
+  document.getElementById('loginWrap').style.display = '';
+  document.getElementById('loginMsg').innerHTML = message ? `<div class="alert alert-error">${esc(message)}</div>` : '';
 }
 
 /* ---------- Login ---------- */
@@ -36,9 +49,11 @@ document.getElementById('loginBtn').addEventListener('click', async () => {
     return;
   }
   adminState.baseUrl = url;
-  adminState.pass = pass;
   msg.innerHTML = `<div class="alert alert-info">Conectando…</div>`;
   try{
+    const { token } = await adminApi('login', { pass });
+    adminState.token = token;
+    document.getElementById('loginPass').value = '';
     const data = await adminApi('getAdminData');
     adminState.data = data;
     document.getElementById('loginWrap').style.display = 'none';
@@ -46,11 +61,18 @@ document.getElementById('loginBtn').addEventListener('click', async () => {
     hydrateAll(data);
   }catch(err){
     console.error(err);
-    msg.innerHTML = `<div class="alert alert-error">Não foi possível entrar. Confira a URL e a senha.</div>`;
+    if(err.message === 'LOGIN_BLOQUEADO'){
+      msg.innerHTML = `<div class="alert alert-error">Muitas tentativas. Aguarde 10 minutos.</div>`;
+    }else if(!isSessionError(err)){
+      msg.innerHTML = `<div class="alert alert-error">Não foi possível entrar. Confira a URL e a senha.</div>`;
+    }
   }
 });
 
-document.getElementById('logoutBtn').addEventListener('click', () => location.reload());
+document.getElementById('logoutBtn').addEventListener('click', async () => {
+  try{ await adminApi('logout'); }catch(err){ console.error(err); }
+  location.reload();
+});
 
 /* ---------- Navegação entre painéis ---------- */
 document.querySelectorAll('.admin-nav button').forEach(btn => {
@@ -103,9 +125,10 @@ document.getElementById('saveDados').addEventListener('click', async () => {
   };
   msg.innerHTML = `<div class="alert alert-info">Salvando…</div>`;
   try{
-    await adminApi('saveInfo', {}, 'POST', payload);
+    await adminApi('saveInfo', payload);
     msg.innerHTML = `<div class="alert alert-success">Dados salvos.</div>`;
   }catch(err){
+    if(isSessionError(err)) return;
     console.error(err);
     msg.innerHTML = `<div class="alert alert-error">Erro ao salvar. Tente novamente.</div>`;
   }
@@ -131,11 +154,11 @@ function renderServicesList(services){
     btn.addEventListener('click', async () => {
       if(!confirm('Remover este serviço?')) return;
       try{
-        await adminApi('removeService', { id: btn.dataset.removeService }, 'POST');
+        await adminApi('removeService', { id: btn.dataset.removeService });
         const data = await adminApi('getAdminData');
         adminState.data = data;
         renderServicesList(data.services || []);
-      }catch(err){ console.error(err); alert('Erro ao remover.'); }
+      }catch(err){ if(isSessionError(err)) return; console.error(err); alert('Erro ao remover.'); }
     });
   });
 }
@@ -149,14 +172,14 @@ document.getElementById('addService').addEventListener('click', async () => {
     return;
   }
   try{
-    await adminApi('addService', {}, 'POST', { name, price, duration });
+    await adminApi('addService', { name, price, duration });
     const data = await adminApi('getAdminData');
     adminState.data = data;
     renderServicesList(data.services || []);
     document.getElementById('svName').value = '';
     document.getElementById('svPrice').value = '';
     document.getElementById('svDuration').value = '';
-  }catch(err){ console.error(err); alert('Erro ao adicionar serviço.'); }
+  }catch(err){ if(isSessionError(err)) return; console.error(err); alert('Erro ao adicionar serviço.'); }
 });
 
 /* ---------- Horários ---------- */
@@ -199,9 +222,10 @@ document.getElementById('saveHours').addEventListener('click', async () => {
   }));
   msg.innerHTML = `<div class="alert alert-info">Salvando…</div>`;
   try{
-    await adminApi('saveHours', {}, 'POST', { hours });
+    await adminApi('saveHours', { hours });
     msg.innerHTML = `<div class="alert alert-success">Horários atualizados.</div>`;
   }catch(err){
+    if(isSessionError(err)) return;
     console.error(err);
     msg.innerHTML = `<div class="alert alert-error">Erro ao salvar horários.</div>`;
   }
@@ -230,11 +254,11 @@ function renderExceptionsList(exceptions){
   wrap.querySelectorAll('[data-remove-exception]').forEach(btn => {
     btn.addEventListener('click', async () => {
       try{
-        await adminApi('removeException', { id: btn.dataset.removeException }, 'POST');
+        await adminApi('removeException', { id: btn.dataset.removeException });
         const data = await adminApi('getAdminData');
         adminState.data = data;
         renderExceptionsList(data.exceptions || []);
-      }catch(err){ console.error(err); alert('Erro ao remover.'); }
+      }catch(err){ if(isSessionError(err)) return; console.error(err); alert('Erro ao remover.'); }
     });
   });
 }
@@ -248,13 +272,13 @@ document.getElementById('addException').addEventListener('click', async () => {
   if(!date){ alert('Escolha uma data.'); return; }
   if(type === 'custom' && (!open || !close)){ alert('Informe abertura e fechamento.'); return; }
   try{
-    await adminApi('addException', {}, 'POST', { date, type, open, close, note });
+    await adminApi('addException', { date, type, open, close, note });
     const data = await adminApi('getAdminData');
     adminState.data = data;
     renderExceptionsList(data.exceptions || []);
     document.getElementById('exDate').value = '';
     document.getElementById('exNote').value = '';
-  }catch(err){ console.error(err); alert('Erro ao adicionar exceção.'); }
+  }catch(err){ if(isSessionError(err)) return; console.error(err); alert('Erro ao adicionar exceção.'); }
 });
 
 /* ---------- Agendamentos ---------- */
@@ -281,12 +305,13 @@ async function loadBookings(){
       btn.addEventListener('click', async () => {
         if(!confirm('Cancelar este agendamento?')) return;
         try{
-          await adminApi('cancelBooking', { id: btn.dataset.cancel }, 'POST');
+          await adminApi('cancelBooking', { id: btn.dataset.cancel });
           loadBookings();
-        }catch(err){ console.error(err); alert('Erro ao cancelar.'); }
+        }catch(err){ if(isSessionError(err)) return; console.error(err); alert('Erro ao cancelar.'); }
       });
     });
   }catch(err){
+    if(isSessionError(err)) return;
     console.error(err);
     wrap.innerHTML = `<div class="alert alert-error">Erro ao carregar agendamentos.</div>`;
   }

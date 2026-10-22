@@ -159,8 +159,7 @@ function doGet(e){
     switch(action){
       case 'getPublicData': result = getPublicData_(); break;
       case 'getAvailability': result = getAvailability_(e.parameter.date, e.parameter.serviceId); break;
-      case 'getAdminData': requireAuth_(e); result = getAdminData_(); break;
-      case 'getBookings': requireAuth_(e); result = { bookings: listBookings_() }; break;
+      // Ações administrativas só existem no doPost (token no corpo, nunca na URL)
       default: result = { error: 'AÇÃO_DESCONHECIDA' };
     }
     return jsonOutput_(result);
@@ -172,17 +171,21 @@ function doGet(e){
 function doPost(e){
   try{
     const action = e.parameter.action;
-    const body = JSON.parse(e.postData.contents || '{}');
+    const body = JSON.parse((e.postData && e.postData.contents) || '{}');
     let result;
     switch(action){
       case 'createBooking': result = createBooking_(body); break;
-      case 'saveInfo': requireAuth_(e); result = saveInfo_(body); break;
-      case 'addService': requireAuth_(e); result = addService_(body); break;
-      case 'removeService': requireAuth_(e); result = removeService_(e.parameter.id); break;
-      case 'saveHours': requireAuth_(e); result = saveHours_(body); break;
-      case 'addException': requireAuth_(e); result = addException_(body); break;
-      case 'removeException': requireAuth_(e); result = removeException_(e.parameter.id); break;
-      case 'cancelBooking': requireAuth_(e); result = cancelBooking_(e.parameter.id); break;
+      case 'login': result = login_(body); break;
+      case 'logout': result = logout_(body); break;
+      case 'getAdminData': requireAuth_(body); result = getAdminData_(); break;
+      case 'getBookings': requireAuth_(body); result = { bookings: listBookings_() }; break;
+      case 'saveInfo': requireAuth_(body); result = saveInfo_(body); break;
+      case 'addService': requireAuth_(body); result = addService_(body); break;
+      case 'removeService': requireAuth_(body); result = removeService_(body.id); break;
+      case 'saveHours': requireAuth_(body); result = saveHours_(body); break;
+      case 'addException': requireAuth_(body); result = addException_(body); break;
+      case 'removeException': requireAuth_(body); result = removeException_(body.id); break;
+      case 'cancelBooking': requireAuth_(body); result = cancelBooking_(body.id); break;
       default: result = { error: 'AÇÃO_DESCONHECIDA' };
     }
     return jsonOutput_(result);
@@ -195,11 +198,58 @@ function jsonOutput_(obj){
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
 
-function requireAuth_(e){
-  const cfg = readConfig_();
-  const pass = toStr_(e.parameter.pass);
-  if(!pass || !cfg.password || pass !== cfg.password){
-    throw new Error('SENHA_INVALIDA');
+/* ============================================================
+   SESSÃO DO PAINEL
+   A senha só é aceita na ação 'login', que devolve um token
+   temporário. As demais ações administrativas exigem o token.
+   ============================================================ */
+const SESSION_TTL_SECONDS  = 21600; // 6 h (máximo do CacheService)
+const LOGIN_MAX_FAILS      = 5;
+const LOGIN_BLOCK_SECONDS  = 600;   // 10 min
+const LOGIN_FAIL_KEY       = 'login_fail';
+const TOKEN_PATTERN        = /^[0-9a-f-]{36}$/i;
+
+function login_(body){
+  const cache = CacheService.getScriptCache();
+  // Lock para o contador de falhas não perder incrementos com tentativas simultâneas
+  const lock = LockService.getScriptLock();
+  try{
+    lock.waitLock(10000);
+  }catch(err){
+    return { error: 'SISTEMA_OCUPADO' };
+  }
+  try{
+    const fails = Number(cache.get(LOGIN_FAIL_KEY)) || 0;
+    if(fails >= LOGIN_MAX_FAILS) return { error: 'LOGIN_BLOQUEADO' };
+
+    const cfg = readConfig_();
+    const pass = toStr_(body.pass);
+    const expected = toStr_(cfg.password);
+    if(!expected || !pass || pass !== expected){
+      // O contador expira sozinho 10 min após a última falha
+      cache.put(LOGIN_FAIL_KEY, String(fails + 1), LOGIN_BLOCK_SECONDS);
+      return { error: fails + 1 >= LOGIN_MAX_FAILS ? 'LOGIN_BLOQUEADO' : 'SENHA_INVALIDA' };
+    }
+
+    cache.remove(LOGIN_FAIL_KEY);
+    const token = Utilities.getUuid();
+    cache.put('sess_' + token, '1', SESSION_TTL_SECONDS);
+    return { token };
+  }finally{
+    lock.releaseLock();
+  }
+}
+
+function logout_(body){
+  const token = toStr_(body.token);
+  if(TOKEN_PATTERN.test(token)) CacheService.getScriptCache().remove('sess_' + token);
+  return { ok:true };
+}
+
+function requireAuth_(body){
+  const token = toStr_(body.token);
+  if(!TOKEN_PATTERN.test(token) || !CacheService.getScriptCache().get('sess_' + token)){
+    throw new Error('SESSAO_EXPIRADA');
   }
 }
 
