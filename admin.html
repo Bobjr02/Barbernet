@@ -42,13 +42,52 @@
   .badge{ display:inline-block; padding:4px 10px; border-radius:99px; font-size:11px; font-family:var(--font-mono); }
   .badge-ok{ background:rgba(126,165,131,.12); color:var(--success); border:1px solid var(--success); }
   .badge-off{ background:rgba(181,83,60,.12); color:var(--danger); border:1px solid var(--danger); }
+  .subtabs{ display:flex; gap:4px; overflow-x:auto; margin-bottom:14px; border-bottom:1px solid var(--line); }
+  .subtab{
+    display:inline-flex; align-items:center; gap:6px; white-space:nowrap; cursor:pointer;
+    background:none; border:none; border-bottom:2px solid transparent; margin-bottom:-1px;
+    color:var(--text-secondary); padding:10px 12px; font-size:14px; font-weight:600;
+  }
+  .subtab:hover{ color:var(--text-primary); }
+  .subtab.active{ color:var(--gold-bright); border-bottom-color:var(--gold-bright); }
+  .count{ display:inline-flex; align-items:center; justify-content:center; min-width:20px; height:20px; padding:0 6px; border-radius:99px; font-size:11px; font-weight:800; }
+  .count-danger{ background:var(--danger); color:#fff; }
+  .count-warn{ background:var(--gold); color:#1a1408; }
+  .count[hidden], .pending-alert[hidden], .complete-form[hidden]{ display:none; }
+  .bookings-toolbar{ display:flex; justify-content:flex-end; margin-bottom:12px; }
+  .pending-alert{
+    display:block; width:100%; margin-bottom:20px; padding:14px 16px; text-align:left; cursor:pointer;
+    border:1px solid var(--danger); border-radius:var(--radius-sm); background:rgba(181,83,60,.12);
+    color:#f0c9be; font-size:14px; font-weight:600;
+  }
+  .pending-alert::after{ content:' →'; }
+  .booking-item{ display:flex; flex-direction:column; gap:4px; padding:16px 0; border-bottom:1px solid var(--line); }
+  .booking-item:first-child{ padding-top:0; }
+  .booking-item:last-child{ border-bottom:none; padding-bottom:0; }
+  .booking-item-head{ display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; }
+  .booking-seals{ display:flex; flex-wrap:wrap; gap:6px; }
+  .booking-client{ color:var(--text-secondary); font-size:14px; }
+  .booking-client a{ color:var(--gold-bright); }
+  .booking-note{ color:var(--text-secondary); font-size:13px; font-style:italic; overflow-wrap:anywhere; }
+  .booking-price{ color:var(--text-faint); font-size:13px; font-family:var(--font-mono); }
+  .booking-actions{ display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+  .booking-actions .btn{ min-height:40px; padding:9px 18px; }
+  .complete-form{ margin-top:10px; padding:14px; background:var(--bg-elevated); border:1px solid var(--line); border-radius:var(--radius-sm); }
+  .complete-form .form-group{ margin-bottom:12px; }
+  .complete-form .booking-actions{ margin-top:0; }
+  .pill{ display:inline-flex; align-items:center; padding:3px 10px; border-radius:99px; border:1px solid; font-size:11px; font-weight:700; }
+  .pill-ok{ color:var(--success); border-color:var(--success); background:rgba(126,165,131,.12); }
+  .pill-warn{ color:var(--gold-bright); border-color:var(--gold); background:rgba(201,162,75,.12); }
+  .pill-danger{ color:#f0c9be; border-color:var(--danger); background:rgba(181,83,60,.12); }
+  .pill-muted{ color:var(--text-secondary); border-color:var(--line-strong); }
   code{ background:var(--bg-elevated); padding:2px 6px; border-radius:4px; font-family:var(--font-mono); font-size:13px; }
   @media (max-width:800px){
-    .admin-shell{ grid-template-columns:1fr; }
+    .admin-shell{ grid-template-columns:minmax(0, 1fr); } /* deixa o menu rolar em vez de alargar a página */
     .admin-side{ border-right:none; border-bottom:1px solid var(--line); }
     .admin-nav{ flex-direction:row; overflow-x:auto; }
     .admin-main{ padding:24px 20px; }
     .day-row{ grid-template-columns:1fr; gap:6px; }
+    .booking-actions .btn{ flex:1 1 calc(50% - 8px); }
   }
 </style>
 </head>
@@ -94,6 +133,7 @@
   </aside>
 
   <main class="admin-main">
+    <button type="button" class="pending-alert" id="pendingAlert" hidden></button>
 
     <!-- Dados da barbearia -->
     <section class="admin-panel active" id="panel-dados">
@@ -164,8 +204,17 @@
 
     <!-- Agendamentos -->
     <section class="admin-panel" id="panel-agendamentos">
-      <div class="panel-head"><h2>Agendamentos</h2><p>Próximos horários marcados pelos clientes.</p></div>
-      <button class="btn btn-ghost" id="refreshBookings" style="margin-bottom:16px">Atualizar lista</button>
+      <div class="panel-head"><h2>Agendamentos</h2><p>Dê baixa nos atendimentos e veja quem ainda não confirmou presença.</p></div>
+      <div class="subtabs">
+        <button type="button" class="subtab active" data-view="hoje">Hoje <span class="count count-warn" id="countHoje" title="Não confirmaram presença" hidden></span></button>
+        <button type="button" class="subtab" data-view="proximos">Próximos</button>
+        <button type="button" class="subtab" data-view="pendentes">Pendentes de baixa <span class="count count-danger" id="countPendentes" hidden></span></button>
+        <button type="button" class="subtab" data-view="historico">Histórico</button>
+      </div>
+      <div class="bookings-toolbar">
+        <button class="btn btn-ghost" id="refreshBookings">Atualizar lista</button>
+      </div>
+      <div id="bookingsMsg"></div>
       <div class="card" id="bookingsList"></div>
     </section>
 
@@ -194,6 +243,6 @@
 
 <script src="js/utils.js?v=20261022-2"></script>
 <script src="js/config.js?v=20261022-2"></script>
-<script src="js/admin.js?v=20261022-2"></script>
+<script src="js/admin.js?v=20261022-3"></script>
 </body>
 </html>

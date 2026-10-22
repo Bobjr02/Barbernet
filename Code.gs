@@ -293,7 +293,10 @@ function doPost(e){
       case 'login': result = login_(body); break;
       case 'logout': result = logout_(body); break;
       case 'getAdminData': requireAuth_(body); result = getAdminData_(); break;
-      case 'getBookings': requireAuth_(body); result = { bookings: listBookings_() }; break;
+      case 'getBookings': requireAuth_(body); result = getBookings_(body.view); break;
+      case 'completeBooking': requireAuth_(body); result = completeBooking_(body); break;
+      case 'markNoShow': requireAuth_(body); result = markNoShow_(body); break;
+      case 'reopenBooking': requireAuth_(body); result = reopenBooking_(body); break;
       case 'saveInfo': requireAuth_(body); result = saveInfo_(body); break;
       case 'addService': requireAuth_(body); result = addService_(body); break;
       case 'removeService': requireAuth_(body); result = removeService_(body.id); break;
@@ -455,15 +458,57 @@ function removeException_(id){
 /* ============================================================
    AGENDAMENTOS
    ============================================================ */
-function listBookings_(){
+/* Lê a aba Agendamentos UMA vez e normaliza cada linha pelo nome da coluna.
+   Campos internos (nunca vão ao navegador): start, rowNumber, eventId. O token não é lido.
+   As colunas da V2 são opcionais aqui, para listar mesmo antes de migrarAgendamentosV2. */
+function readBookingsSheet_(){
   const sheet = getBookingsSheet_();
   const c = requireCols_(cols_(sheet), ['id','data','hora','duracao','servicoId','servicoNome','nome','telefone','nota','status']);
-  const rows = sheet.getDataRange().getValues().slice(1);
-  return rows.filter(r => r[c.id] && r[c.status] !== 'cancelado')
-    .map(r => ({
-      id:toStr_(r[c.id]), date:toISODate_(r[c.data]), time:toHHmm_(r[c.hora]), duration:Number(r[c.duracao]),
-      serviceId:toStr_(r[c.servicoId]), serviceName:toStr_(r[c.servicoNome]), name:toStr_(r[c.nome]),
-      phone:toStr_(r[c.telefone]), note:toStr_(r[c.nota]), status:toStr_(r[c.status]),
+  const get = (r, name) => c[name] === undefined ? '' : r[c[name]];
+  const rows = sheet.getDataRange().getValues();
+  const bookings = [];
+  for(let i=1;i<rows.length;i++){
+    const r = rows[i];
+    if(!r[c.id]) continue;
+    const date = toISODate_(r[c.data]);
+    const time = toHHmm_(r[c.hora]);
+    bookings.push({
+      id: toStr_(r[c.id]), date, time, duration: Number(r[c.duracao]),
+      serviceId: toStr_(r[c.servicoId]), serviceName: toStr_(r[c.servicoNome]),
+      name: toStr_(r[c.nome]), phone: toStr_(r[c.telefone]), note: toStr_(r[c.nota]),
+      status: toStr_(r[c.status]).toLowerCase(),
+      preco: toNumberOrEmpty_(get(r, 'preco')),
+      valorCobrado: toNumberOrEmpty_(get(r, 'valorCobrado')),
+      formaPagamento: toStr_(get(r, 'formaPagamento')),
+      presencaConfirmada: toStr_(get(r, 'presencaConfirmadaEm')) !== '',
+      aceitaWhatsapp: toBool_(get(r, 'aceitaWhatsapp')),
+      canceladoPor: toStr_(get(r, 'canceladoPor')),
+      concluidoEm: toIsoDateTime_(get(r, 'concluidoEm')),
+      lembreteEnviadoEm: toIsoDateTime_(get(r, 'lembreteEnviadoEm')),
+      start: bookingStart_(date, time),
+      rowNumber: i + 1,
+      eventId: toStr_(get(r, 'eventoId')),
+    });
+  }
+  return { sheet, c, bookings };
+}
+function readBookings_(){
+  return readBookingsSheet_().bookings;
+}
+
+/* Remove os campos internos antes de enviar ao painel */
+function publicBooking_(b){
+  const { start, rowNumber, eventId, ...rest } = b;
+  return rest;
+}
+
+function listBookings_(){
+  return readBookings_()
+    .filter(b => b.status !== 'cancelado')
+    .map(b => ({
+      id:b.id, date:b.date, time:b.time, duration:b.duration,
+      serviceId:b.serviceId, serviceName:b.serviceName, name:b.name,
+      phone:b.phone, note:b.note, status:b.status,
     }))
     .sort((a,b) => (a.date+a.time).localeCompare(b.date+b.time));
 }
@@ -549,7 +594,7 @@ function createBooking_(body){
   try{
     // Anti-spam dentro do lock, para que dois pedidos simultâneos do mesmo telefone não passem juntos
     const nowKey = `${todayISO_()} ${Utilities.formatDate(new Date(), tz_(), 'HH:mm')}`;
-    const futureForPhone = listBookings_().filter(b =>
+    const futureForPhone = readBookings_().filter(b =>
       b.status === 'confirmado' &&
       `${b.date} ${b.time}` >= nowKey &&
       b.phone.replace(/\D/g, '') === phoneDigits
@@ -595,23 +640,16 @@ function createBooking_(body){
 }
 
 function cancelBooking_(id){
-  const sheet = getBookingsSheet_();
-  const c = requireCols_(cols_(sheet), ['id','status','eventoId','canceladoPor']);
-  const rows = sheet.getDataRange().getValues();
-  for(let i=1;i<rows.length;i++){
-    if(rows[i][c.id] === id){
-      cancelBookingRow_(sheet, c, i + 1, rows[i], 'dono');
-      return { ok:true };
-    }
-  }
-  return { error: 'AGENDAMENTO_NAO_ENCONTRADO' };
+  return updateBookingById_(id, (b, ctx) => {
+    if(b.status !== 'confirmado') return { error: 'ACAO_INVALIDA_PARA_STATUS' };
+    cancelBookingRow_(ctx.sheet, ctx.c, b.rowNumber, b.eventId, 'dono');
+    return { ok:true };
+  });
 }
 
 /* Marca a linha como cancelada e remove o evento da agenda */
-function cancelBookingRow_(sheet, c, rowNumber, row, by){
-  sheet.getRange(rowNumber, c.status + 1).setValue('cancelado');
-  sheet.getRange(rowNumber, c.canceladoPor + 1).setValue(by);
-  const eventId = row[c.eventoId];
+function cancelBookingRow_(sheet, c, rowNumber, eventId, by){
+  writeBookingCells_(sheet, c, rowNumber, { status: 'cancelado', canceladoPor: by });
   if(eventId){
     try{
       const cfg = readConfig_();
@@ -619,6 +657,121 @@ function cancelBookingRow_(sheet, c, rowNumber, row, by){
       cal.getEventById(eventId).deleteEvent();
     }catch(err){ /* evento pode já não existir */ }
   }
+}
+
+/* ============================================================
+   BAIXA DE ATENDIMENTOS (painel)
+   ============================================================ */
+const BOOKING_VIEWS = ['hoje', 'proximos', 'pendentes', 'historico'];
+const HISTORY_STATUSES = ['concluido', 'faltou', 'cancelado'];
+const PAYMENT_METHODS = ['dinheiro', 'pix', 'debito', 'credito', 'outro'];
+const MAX_CHARGE = 10000;
+
+function isoDaysFromToday_(n){
+  return Utilities.formatDate(new Date(Date.now() + n*86400000), tz_(), 'yyyy-MM-dd');
+}
+
+/* 'confirmado' cujo início já passou. Hora ilegível: usa só a data, para não sumir da lista. */
+function isAwaitingClose_(b, now, today){
+  if(b.status !== 'confirmado') return false;
+  return b.start ? b.start <= now : (b.date !== '' && b.date <= today);
+}
+
+function bookingCounts_(bookings, now, today){
+  return {
+    pendentes: bookings.filter(b => isAwaitingClose_(b, now, today)).length,
+    naoConfirmadosHoje: bookings.filter(b =>
+      b.status === 'confirmado' && b.date === today && b.start && b.start > now && !b.presencaConfirmada
+    ).length,
+  };
+}
+
+function getBookings_(view){
+  view = toStr_(view) || 'hoje';
+  if(!BOOKING_VIEWS.includes(view)) return { error: 'DADOS_INVALIDOS' };
+  const all = readBookings_();
+  const now = new Date();
+  const today = todayISO_();
+  const byStart = (a, b) => (a.date + a.time).localeCompare(b.date + b.time);
+  let list;
+  switch(view){
+    case 'hoje':
+      list = all.filter(b => b.date === today && b.status !== 'cancelado').sort(byStart);
+      break;
+    case 'proximos': {
+      const until = isoDaysFromToday_(14);
+      list = all.filter(b => b.status === 'confirmado' && b.date > today && b.date <= until).sort(byStart);
+      break;
+    }
+    case 'pendentes':
+      list = all.filter(b => isAwaitingClose_(b, now, today)).sort(byStart);
+      break;
+    case 'historico': {
+      const since = isoDaysFromToday_(-30);
+      list = all.filter(b => HISTORY_STATUSES.includes(b.status) && b.date >= since).sort((a, b) => byStart(b, a));
+      break;
+    }
+  }
+  return { bookings: list.map(publicBooking_), counts: bookingCounts_(all, now, today) };
+}
+
+/* Escreve células da linha pelo nome da coluna (confere todas antes de gravar a primeira) */
+function writeBookingCells_(sheet, c, rowNumber, values){
+  requireCols_(c, Object.keys(values));
+  Object.keys(values).forEach(k => sheet.getRange(rowNumber, c[k] + 1).setValue(values[k]));
+}
+
+/* Localiza pelo id e roda fn(booking, {sheet, c}) dentro do lock, com flush no final */
+function updateBookingById_(id, fn){
+  return withScriptLock_(() => {
+    id = toStr_(id);
+    const ctx = readBookingsSheet_();
+    const b = id ? ctx.bookings.find(x => x.id === id) : null;
+    if(!b) return { error: 'AGENDAMENTO_NAO_ENCONTRADO' };
+    const result = fn(b, ctx);
+    SpreadsheetApp.flush();
+    return result;
+  });
+}
+
+function completeBooking_(body){
+  return updateBookingById_(body.id, (b, ctx) => {
+    const validDate = /^\d{4}-\d{2}-\d{2}$/.test(b.date);
+    if(b.status !== 'confirmado' || !validDate || b.date > todayISO_()) return { error: 'ACAO_INVALIDA_PARA_STATUS' };
+
+    const raw = body.valorCobrado;
+    let valor;
+    if(raw === undefined || raw === null || toStr_(raw) === '') valor = b.preco; // vazio: usa o preço congelado
+    else if(typeof raw === 'number' || typeof raw === 'string') valor = Number(raw);
+    if(typeof valor !== 'number' || !Number.isFinite(valor) || valor < 0 || valor > MAX_CHARGE) return { error: 'DADOS_INVALIDOS' };
+    const forma = toStr_(body.formaPagamento).toLowerCase();
+    if(!PAYMENT_METHODS.includes(forma)) return { error: 'DADOS_INVALIDOS' };
+
+    writeBookingCells_(ctx.sheet, ctx.c, b.rowNumber, {
+      status: 'concluido',
+      valorCobrado: Math.round((valor + Number.EPSILON) * 100) / 100,
+      formaPagamento: forma,
+      concluidoEm: new Date(),
+    });
+    return { ok:true };
+  });
+}
+
+function markNoShow_(body){
+  return updateBookingById_(body.id, (b, ctx) => {
+    if(b.status !== 'confirmado' || !b.start || b.start > new Date()) return { error: 'ACAO_INVALIDA_PARA_STATUS' };
+    writeBookingCells_(ctx.sheet, ctx.c, b.rowNumber, { status: 'faltou' });
+    return { ok:true };
+  });
+}
+
+/* Desfaz a baixa (concluído ou faltou) para corrigir enganos */
+function reopenBooking_(body){
+  return updateBookingById_(body.id, (b, ctx) => {
+    if(b.status !== 'concluido' && b.status !== 'faltou') return { error: 'ACAO_INVALIDA_PARA_STATUS' };
+    writeBookingCells_(ctx.sheet, ctx.c, b.rowNumber, { status: 'confirmado', valorCobrado: '', formaPagamento: '', concluidoEm: '' });
+    return { ok:true };
+  });
 }
 
 /* ============================================================
@@ -684,7 +837,7 @@ function cancelByClient_(body){
     if(!found) return { error: 'AGENDAMENTO_NAO_ENCONTRADO' };
     const err = clientActionError_(found);
     if(err) return { error: err };
-    cancelBookingRow_(found.sheet, found.c, found.rowNumber, found.row, 'cliente');
+    cancelBookingRow_(found.sheet, found.c, found.rowNumber, toStr_(found.row[found.c.eventoId]), 'cliente');
     SpreadsheetApp.flush(); // libera o horário antes de soltar o lock
     return { ok:true };
   });
@@ -825,6 +978,9 @@ function getAdminData_(){
   let sheetsOk = true, calendarOk = true;
   try{ SpreadsheetApp.getActiveSpreadsheet(); }catch(e){ sheetsOk = false; }
   try{ CalendarApp.getCalendarById(cfg.calendarId).getName(); }catch(e){ calendarOk = false; }
+  // Os alertas não podem impedir a entrada no painel
+  let counts = null;
+  try{ counts = bookingCounts_(readBookings_(), new Date(), todayISO_()); }catch(e){ Logger.log(`counts: ${e.message}`); }
 
   return {
     name: cfg.name, tagline: cfg.tagline, lede: cfg.lede,
@@ -832,7 +988,7 @@ function getAdminData_(){
     address: cfg.address, mapLink: cfg.mapLink,
     services: listServices_(), hours: listHours_(),
     exceptions: listExceptions_().map(e => ({ ...e, dateLabel: formatDateLabel_(e.date) })),
-    sheetsOk, calendarOk,
+    sheetsOk, calendarOk, counts,
   };
 }
 
@@ -859,6 +1015,21 @@ function tz_(){
 }
 function toStr_(v){
   return String(v ?? '').trim();
+}
+/* Número finito, ou '' se vazio/ilegível */
+function toNumberOrEmpty_(v){
+  if(toStr_(v) === '') return '';
+  const n = Number(v);
+  return Number.isFinite(n) ? n : '';
+}
+/* TRUE do Sheets ou o texto "true" */
+function toBool_(v){
+  return v === true || toStr_(v).toLowerCase() === 'true';
+}
+/* Date → ISO 8601; texto → como está */
+function toIsoDateTime_(v){
+  if(v instanceof Date) return isNaN(v) ? '' : v.toISOString();
+  return toStr_(v);
 }
 /* Date → 'HH:mm'; '9:00' / '09:00:00' → '09:00'; qualquer outra coisa → ''.
    tz opcional: usado só por migrarFormatos() para ler valores antigos no fuso da planilha. */
