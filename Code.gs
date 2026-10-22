@@ -44,7 +44,8 @@ const REMINDER_TEMPLATE_DEFAULT =
   '\n' +
   'Confirme sua presença pelo link abaixo. Se não puder vir, cancele por lá mesmo, assim liberamos o horário para outra pessoa:\n' +
   '{link}';
-const WEEKDAYS_PT = ['domingo','segunda-feira','terça-feira','quarta-feira','quinta-feira','sexta-feira','sábado'];
+/* Nomes em português: Utilities.formatDate com 'EEEE' devolve em inglês no Apps Script */
+const DIAS_SEMANA_ = ['domingo','segunda-feira','terça-feira','quarta-feira','quinta-feira','sexta-feira','sábado'];
 
 /* Colunas (pelo nome do cabeçalho) que precisam ficar em formato texto ('@')
    para o Sheets não converter "09:00" em Date, telefones/senhas em número etc.
@@ -829,8 +830,7 @@ function isReminderDue_(b, now, hours){
 function formatReminderDate_(dateStr){
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
   if(!m) return dateStr;
-  const weekday = WEEKDAYS_PT[new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay()];
-  return `${weekday}, ${m[3]}/${m[2]}`;
+  return `${diaSemana_(dateStr)}, ${m[3]}/${m[2]}`;
 }
 
 /* Monta o texto do lembrete. Independente do painel: um gatilho automático pode reutilizar.
@@ -1179,9 +1179,18 @@ function toISODate_(v, tz){
   if(v instanceof Date) return isNaN(v) ? '' : Utilities.formatDate(v, tz || tz_(), 'yyyy-MM-dd');
   return toStr_(v);
 }
+/* 'AAAA-MM-DD' → 'dd/MM (sexta-feira)' */
 function formatDateLabel_(dateStr){
-  const d = new Date(`${dateStr}T00:00:00`);
-  return Utilities.formatDate(d, tz_(), 'dd/MM (EEEE)');
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(toStr_(dateStr));
+  if(!m) return toStr_(dateStr);
+  return `${m[3]}/${m[2]} (${diaSemana_(m[0])})`;
+}
+/* Dia da semana em português de uma data 'AAAA-MM-DD' que já está no fuso tz_()
+   (todas as datas do sistema são gravadas assim). É aritmética de calendário:
+   o dia da semana de uma data não depende de fuso, só a conversão Date → data. */
+function diaSemana_(dateStr){
+  const [y, mo, d] = dateStr.split('-').map(Number);
+  return DIAS_SEMANA_[new Date(Date.UTC(y, mo - 1, d)).getUTCDay()];
 }
 function todayISO_(){
   return Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd');
