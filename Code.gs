@@ -30,7 +30,9 @@ const BOOKING_HEADERS = [
   'preco','token','aceitaWhatsapp','presencaConfirmadaEm','canceladoPor','valorCobrado','formaPagamento','concluidoEm','lembreteEnviadoEm',
 ];
 /* Status: 'confirmado' (agendado e ativo), 'cancelado', 'concluido', 'faltou' */
-const BUSY_STATUSES = ['confirmado', 'concluido']; // ocupam o horário; cancelado e faltou liberam
+/* Só estes liberam o horário. Qualquer outro status — inclusive vazio ou digitado
+   errado — ocupa, para nunca permitir agendamento duplo por engano. */
+const FREE_STATUSES = ['cancelado', 'faltou'];
 
 /* Colunas (pelo nome do cabeçalho) que precisam ficar em formato texto ('@')
    para o Sheets não converter "09:00" em Date, telefones/senhas em número etc.
@@ -760,7 +762,7 @@ function getBusyRanges_(dateStr){
   const c = requireCols_(cols_(sheet), ['id','data','hora','duracao','status']);
   const rows = sheet.getDataRange().getValues().slice(1);
   return rows
-    .filter(r => r[c.id] && r[c.data] && BUSY_STATUSES.includes(toStr_(r[c.status])) && toISODate_(r[c.data]) === dateStr)
+    .filter(r => r[c.id] && r[c.data] && !FREE_STATUSES.includes(toStr_(r[c.status]).toLowerCase()) && toISODate_(r[c.data]) === dateStr)
     .map(r => {
       const time = toHHmm_(r[c.hora]);
       if(!time){
