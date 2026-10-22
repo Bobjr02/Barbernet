@@ -42,11 +42,22 @@ clasp redeploy "$DEPLOYMENT_ID" --description "$DESCRICAO"
 
 # (e) Confere a URL
 URL="https://script.google.com/macros/s/${DEPLOYMENT_ID}/exec"
-URL_SITE="$(grep -o 'https://script.google.com/macros/s/[^"]*/exec' js/config.js || true)"
+# Lê só a linha de código (o comentário do topo tem uma URL de exemplo)
+LINHAS_URL="$(awk '
+  emcomentario { if (sub(/.*\*\//, "")) emcomentario = 0; else next }
+  { gsub(/\/\*.*\*\//, "") }
+  /\/\*/ { sub(/\/\*.*/, ""); emcomentario = 1 }
+  /^[[:space:]]*\/\// { next }
+  /^[[:space:]]*const[[:space:]]+APP_SCRIPT_URL[[:space:]]*=/ { print }
+' js/config.js)"
+QTD_LINHAS="$(printf '%s' "$LINHAS_URL" | grep -c . || true)"
+[[ "$QTD_LINHAS" -eq 1 ]] || erro "Esperava exatamente 1 linha 'const APP_SCRIPT_URL' em js/config.js, encontrei ${QTD_LINHAS}. Confira a URL manualmente: ${URL}"
+URL_SITE="$(sed -E 's/^[^"]*"([^"]*)".*$/\1/' <<< "$LINHAS_URL")"
+[[ "$URL_SITE" == https://* && "$URL_SITE" != *"..."* ]] || erro "URL inválida lida de js/config.js: '${URL_SITE}'. Confira a URL manualmente: ${URL}"
 echo
 echo "Descrição: ${DESCRICAO}"
 echo "URL do Web App:    ${URL}"
-echo "URL no config.js:  ${URL_SITE:-(não encontrada)}"
+echo "URL no config.js:  ${URL_SITE}"
 if [[ "$URL" == "$URL_SITE" ]]; then
   echo "OK — mesma URL do js/config.js."
 else
